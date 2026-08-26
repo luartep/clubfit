@@ -118,7 +118,7 @@ export default function CamaraCaptura({ onCaptura, onCerrar }: Props) {
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', alignItems: 'center' }}>
             <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', border: '2px solid #2a2a2a' }}>
-              <video ref={videoRef} autoPlay playsInline muted style={{ display: 'block', maxWidth: '100%', maxHeight: '360px' }} />
+              <video ref={videoRef} autoPlay playsInline muted style={{ display: 'block', maxWidth: '100%', maxHeight: '360px', transform: 'scaleX(-1)' }} />
               {/* Guía de encuadre */}
               <div style={{
                 position: 'absolute', inset: 0, pointerEvents: 'none',

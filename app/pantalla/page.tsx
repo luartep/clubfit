@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { formatearRut, validarRut, estadoPlan, planLabel, formatDate, mensajeVencimiento } from '@/lib/utils';
 
 type Modo = 'espera' | 'facial' | 'manual';
-type ResultadoTipo = 'bienvenido' | 'vencido' | 'no_encontrado' | 'error' | null;
+type ResultadoTipo = 'bienvenido' | 'vencido' | 'duplicado' | 'no_encontrado' | 'error' | null;
 
 interface Resultado {
   tipo: ResultadoTipo;
@@ -153,12 +153,12 @@ export default function PantallaPage() {
         
         if (data.encontrado) {
           setResultado({
-            tipo: data.planVigente ? 'bienvenido' : 'vencido',
+            tipo: data.duplicado ? 'duplicado' : data.planVigente ? 'bienvenido' : 'vencido',
             usuario: data.usuario,
             mensaje: data.mensaje,
             planVigente: data.planVigente,
           });
-          cargarAccesos();
+          if (!data.duplicado) cargarAccesos();
           if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
           setTimeout(() => {
             if (modo === 'facial' && streamRef.current) {
@@ -208,13 +208,13 @@ export default function PantallaPage() {
       const asData = await asRes.json();
 
       setResultado({
-        tipo: asData.planVigente ? 'bienvenido' : 'vencido',
+        tipo: asData.duplicado ? 'duplicado' : asData.planVigente ? 'bienvenido' : 'vencido',
         usuario: asData.usuario || usuario,
         mensaje: asData.mensaje,
         planVigente: asData.planVigente,
       });
       setRutManual('');
-      cargarAccesos();
+      if (!asData.duplicado) cargarAccesos();
     } catch {
       setResultado({ tipo: 'error', mensaje: 'Error de conexión' });
     }
@@ -224,6 +224,7 @@ export default function PantallaPage() {
   const coloresResultado: Record<string, { bg: string; border: string; texto: string }> = {
     bienvenido: { bg: 'rgba(0,224,150,0.1)', border: '#00e096', texto: '#00e096' },
     vencido: { bg: 'rgba(255,170,0,0.1)', border: '#ffaa00', texto: '#ffaa00' },
+    duplicado: { bg: 'rgba(255,255,255,0.06)', border: '#888', texto: '#ffffff' },
     no_encontrado: { bg: 'rgba(255,61,113,0.1)', border: '#ff3d71', texto: '#ff3d71' },
     error: { bg: 'rgba(255,61,113,0.1)', border: '#ff3d71', texto: '#ff3d71' },
   };
@@ -284,7 +285,7 @@ export default function PantallaPage() {
                     fontSize: '2rem',
                     marginBottom: '0.3rem',
                   }}>
-                    {resultado.tipo === 'bienvenido' ? '✅' : resultado.tipo === 'vencido' ? '⚠️' : '❌'}
+                    {resultado.tipo === 'bienvenido' ? '✅' : resultado.tipo === 'vencido' ? '⚠️' : resultado.tipo === 'duplicado' ? '🕒' : '❌'}
                   </div>
                   <div style={{
                     fontSize: '1.5rem', fontWeight: 800,
@@ -354,6 +355,7 @@ export default function PantallaPage() {
                   <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', flex: 1 }}>
                     <video ref={videoRef} autoPlay playsInline muted style={{
                       width: '100%', height: '100%', objectFit: 'cover', display: 'block',
+                      transform: 'scaleX(-1)',
                     }} />
                     {/* Overlay de escaneo */}
                     <div style={{

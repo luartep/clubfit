@@ -28,7 +28,7 @@ export default function AdminPage() {
   }, []);
 
   useEffect(() => { cargarUsuarios(); }, [cargarUsuarios]);
-  useEffect(() => { if (tab === 'asistencias') cargarAsistencias(); }, [tab, cargarAsistencias]);
+  useEffect(() => { cargarAsistencias(); }, [cargarAsistencias]);
 
   const eliminar = async (id: number) => {
     if (!confirm('¿Eliminar este usuario?')) return;

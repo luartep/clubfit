@@ -4,6 +4,10 @@ import { neon } from '@neondatabase/serverless';
 
 const sql = neon(process.env.POSTGRES_URL ?? process.env.DATABASE_URL!);
 
+// Evita marcar dos veces a la misma persona en un lapso muy corto
+// (ej. reconocimiento facial reintentando cada 3 segundos).
+const COOLDOWN_MS = 2 * 60 * 1000; // 2 minutos
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -26,6 +30,25 @@ export async function POST(req: NextRequest) {
     const hoy = new Date();
     const vencimiento = new Date(usuario.plan_vencimiento);
     const planVigente = vencimiento >= hoy;
+
+    // Chequeo de duplicado reciente
+    const ultimas = await sql`
+      SELECT timestamp FROM asistencias
+      WHERE usuario_id = ${usuarioId}
+      ORDER BY timestamp DESC
+      LIMIT 1
+    `;
+    if (ultimas.length) {
+      const msDesdeUltima = Date.now() - new Date(ultimas[0].timestamp).getTime();
+      if (msDesdeUltima < COOLDOWN_MS) {
+        return NextResponse.json({
+          duplicado: true,
+          usuario,
+          planVigente,
+          mensaje: `${usuario.nombre} ya registró su ingreso hace instantes`,
+        });
+      }
+    }
 
     const rows = await sql`
       INSERT INTO asistencias (usuario_id, metodo, exitoso)
