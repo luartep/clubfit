@@ -73,6 +73,7 @@ export async function GET(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
     const usuarioId = searchParams.get('usuarioId');
+    const soloHoy = searchParams.get('hoy') === 'true';
     const limit = parseInt(searchParams.get('limit') || '50');
 
     if (usuarioId) {
@@ -81,6 +82,18 @@ export async function GET(req: NextRequest) {
         JOIN usuarios u ON a.usuario_id = u.id
         WHERE a.usuario_id = ${parseInt(usuarioId)}
         ORDER BY a.timestamp DESC LIMIT ${limit}
+      `;
+      return NextResponse.json(rows);
+    }
+
+    // Todas las asistencias de hoy, sin límite — para que el contador
+    // "Asistencias Hoy" del panel no se quede pegado en el tope de LIMIT.
+    if (soloHoy) {
+      const rows = await sql`
+        SELECT a.*, u.nombre, u.rut FROM asistencias a
+        JOIN usuarios u ON a.usuario_id = u.id
+        WHERE a.timestamp >= CURRENT_DATE AND a.timestamp < CURRENT_DATE + INTERVAL '1 day'
+        ORDER BY a.timestamp DESC
       `;
       return NextResponse.json(rows);
     }

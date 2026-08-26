@@ -11,24 +11,44 @@ export default function AdminPage() {
   const [mostrarForm, setMostrarForm] = useState(false);
   const [usuarioEditar, setUsuarioEditar] = useState<any>(null);
   const [asistencias, setAsistencias] = useState<any[]>([]);
+  const [asistenciasHoy, setAsistenciasHoy] = useState<any[]>([]);
   const [tab, setTab] = useState<'usuarios' | 'asistencias'>('usuarios');
 
   const cargarUsuarios = useCallback(async () => {
-    setCargando(true);
     const res = await fetch(`/api/usuarios${busqueda ? `?buscar=${busqueda}` : ''}`);
     const data = await res.json();
     setUsuarios(Array.isArray(data) ? data : []);
     setCargando(false);
   }, [busqueda]);
 
+  // Historial que se muestra en la pestaña "Historial de Accesos" (los últimos 100)
   const cargarAsistencias = useCallback(async () => {
     const res = await fetch('/api/asistencia?limit=100');
     const data = await res.json();
     setAsistencias(Array.isArray(data) ? data : []);
   }, []);
 
+  // Todas las asistencias del día — sin límite — para el contador "Asistencias Hoy"
+  const cargarAsistenciasHoy = useCallback(async () => {
+    const res = await fetch('/api/asistencia?hoy=true');
+    const data = await res.json();
+    setAsistenciasHoy(Array.isArray(data) ? data : []);
+  }, []);
+
   useEffect(() => { cargarUsuarios(); }, [cargarUsuarios]);
-  useEffect(() => { cargarAsistencias(); }, [cargarAsistencias]);
+  useEffect(() => { cargarAsistenciasHoy(); }, [cargarAsistenciasHoy]);
+  useEffect(() => { if (tab === 'asistencias') cargarAsistencias(); }, [tab, cargarAsistencias]);
+
+  // Actualización en vivo: refresca usuarios y asistencias cada pocos segundos
+  // para que el panel se ponga al día solo si alguien ingresa desde la pantalla de acceso.
+  useEffect(() => {
+    const id = setInterval(() => {
+      cargarUsuarios();
+      cargarAsistenciasHoy();
+      if (tab === 'asistencias') cargarAsistencias();
+    }, 8000);
+    return () => clearInterval(id);
+  }, [cargarUsuarios, cargarAsistenciasHoy, cargarAsistencias, tab]);
 
   const eliminar = async (id: number) => {
     if (!confirm('¿Eliminar este usuario?')) return;
@@ -49,10 +69,7 @@ export default function AdminPage() {
   const hoy = new Date();
   const activos = usuarios.filter(u => u.activo && new Date(u.plan_vencimiento) >= hoy).length;
   const vencidos = usuarios.filter(u => new Date(u.plan_vencimiento) < hoy).length;
-  const hoyAsistencias = asistencias.filter(a => {
-    const d = new Date(a.timestamp);
-    return d.toDateString() === hoy.toDateString();
-  }).length;
+  const hoyAsistencias = asistenciasHoy.length;
 
   const badge = (tipo: string) => {
     const estado = estadoPlan(new Date().toISOString().split('T')[0]);

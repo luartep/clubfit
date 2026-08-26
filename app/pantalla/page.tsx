@@ -57,6 +57,13 @@ export default function PantallaPage() {
 
   useEffect(() => { cargarAccesos(); }, [cargarAccesos]);
 
+  // Actualización en vivo del listado lateral, por si el ingreso se registra
+  // desde otro dispositivo (otra pantalla de acceso o el panel admin).
+  useEffect(() => {
+    const id = setInterval(cargarAccesos, 10000);
+    return () => clearInterval(id);
+  }, [cargarAccesos]);
+
   // Cargar face-api.js
   const cargarFaceApi = useCallback(async () => {
     if (typeof window === 'undefined') return;
