@@ -108,3 +108,24 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: e.message }, { status: 500 });
   }
 }
+
+// Reinicia el conteo de asistencias. Protegido: solo el panel admin puede llamarlo (ver proxy.ts).
+// ?todo=true borra todo el historial; sin ese parámetro, borra solo las asistencias de hoy.
+export async function DELETE(req: NextRequest) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const todo = searchParams.get('todo') === 'true';
+
+    const rows = todo
+      ? await sql`DELETE FROM asistencias RETURNING id`
+      : await sql`
+          DELETE FROM asistencias
+          WHERE timestamp >= CURRENT_DATE AND timestamp < CURRENT_DATE + INTERVAL '1 day'
+          RETURNING id
+        `;
+
+    return NextResponse.json({ ok: true, eliminadas: rows.length });
+  } catch (e: any) {
+    return NextResponse.json({ error: e.message }, { status: 500 });
+  }
+}

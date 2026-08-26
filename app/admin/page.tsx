@@ -76,6 +76,21 @@ export default function AdminPage() {
     window.location.href = '/api/usuarios/exportar';
   };
 
+  const reiniciarConteo = async (todo: boolean) => {
+    const confirmacion = todo
+      ? '¿Borrar TODO el historial de asistencias? Esta acción no se puede deshacer.'
+      : '¿Reiniciar el conteo de asistencias de hoy? Se borrarán solo los registros de hoy.';
+    if (!confirm(confirmacion)) return;
+
+    const res = await fetch(`/api/asistencia${todo ? '?todo=true' : ''}`, { method: 'DELETE' });
+    if (res.ok) {
+      cargarAsistenciasHoy();
+      cargarAsistencias();
+    } else {
+      alert('No se pudo reiniciar el conteo. Intenta de nuevo.');
+    }
+  };
+
   // Stats
   const hoy = new Date();
   const activos = usuarios.filter(u => u.activo && new Date(u.plan_vencimiento) >= hoy).length;
@@ -300,10 +315,27 @@ export default function AdminPage() {
         )}
 
         {tab === 'asistencias' && (
-          <div style={{
-            background: '#141414', border: '1px solid #1e1e1e', borderRadius: '12px',
-            overflow: 'hidden',
-          }}>
+          <>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginBottom: '1rem' }}>
+              <button onClick={() => reiniciarConteo(false)} style={{
+                background: '#1e1e1e', color: '#ffaa00', border: '1px solid #ffaa00',
+                borderRadius: '8px', padding: '0.6rem 1.2rem', cursor: 'pointer',
+                fontWeight: 700, fontSize: '0.85rem', whiteSpace: 'nowrap',
+              }}>
+                🔄 Reiniciar conteo de hoy
+              </button>
+              <button onClick={() => reiniciarConteo(true)} style={{
+                background: '#1e1e1e', color: '#ff3d71', border: '1px solid #ff3d71',
+                borderRadius: '8px', padding: '0.6rem 1.2rem', cursor: 'pointer',
+                fontWeight: 700, fontSize: '0.85rem', whiteSpace: 'nowrap',
+              }}>
+                🗑️ Borrar todo el historial
+              </button>
+            </div>
+            <div style={{
+              background: '#141414', border: '1px solid #1e1e1e', borderRadius: '12px',
+              overflow: 'hidden',
+            }}>
             <table style={{ width: '100%', borderCollapse: 'collapse' }}>
               <thead>
                 <tr style={{ borderBottom: '1px solid #1e1e1e' }}>
@@ -350,7 +382,8 @@ export default function AdminPage() {
                 )}
               </tbody>
             </table>
-          </div>
+            </div>
+          </>
         )}
       </main>
 

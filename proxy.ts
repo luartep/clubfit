@@ -48,9 +48,18 @@ export function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // Reiniciar el conteo de asistencias: solo admin.
+  // GET y POST de /api/asistencia quedan públicos porque los usa la pantalla de acceso.
+  if (pathname === '/api/asistencia' && req.method === 'DELETE') {
+    if (!estaAutenticado(req)) {
+      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+    }
+    return NextResponse.next();
+  }
+
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: ['/admin/:path*', '/api/usuarios', '/api/usuarios/:path*'],
+  matcher: ['/admin/:path*', '/api/usuarios', '/api/usuarios/:path*', '/api/asistencia'],
 };
