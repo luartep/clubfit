@@ -1,0 +1,470 @@
+'use client';
+import { useState, useRef, useEffect, useCallback } from 'react';
+import Link from 'next/link';
+import { formatearRut, validarRut, estadoPlan, planLabel, formatDate } from '@/lib/utils';
+
+type Modo = 'espera' | 'facial' | 'manual';
+type ResultadoTipo = 'bienvenido' | 'vencido' | 'no_encontrado' | 'error' | null;
+
+interface Resultado {
+  tipo: ResultadoTipo;
+  usuario?: any;
+  mensaje?: string;
+  planVigente?: boolean;
+}
+
+export default function PantallaPage() {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const intervalRef = useRef<any>(null);
+
+  const [modo, setModo] = useState<Modo>('espera');
+  const [resultado, setResultado] = useState<Resultado>({ tipo: null });
+  const [rutManual, setRutManual] = useState('');
+  const [cargando, setCargando] = useState(false);
+  const [faceApiReady, setFaceApiReady] = useState(false);
+  const [faceApiCargando, setFaceApiCargando] = useState(false);
+  const [hora, setHora] = useState('');
+  const [escaneando, setEscaneando] = useState(false);
+  const [ultimosAccesos, setUltimosAccesos] = useState<any[]>([]);
+
+  // Reloj
+  useEffect(() => {
+    const tick = () => setHora(new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Auto-limpiar resultado después de 5 segundos
+  useEffect(() => {
+    if (resultado.tipo) {
+      const t = setTimeout(() => {
+        setResultado({ tipo: null });
+        if (modo === 'facial') setModo('facial'); // mantiene cámara
+      }, 5000);
+      return () => clearTimeout(t);
+    }
+  }, [resultado]);
+
+  // Cargar últimos accesos
+  const cargarAccesos = useCallback(async () => {
+    const res = await fetch('/api/asistencia?limit=8');
+    const data = await res.json();
+    setUltimosAccesos(Array.isArray(data) ? data : []);
+  }, []);
+
+  useEffect(() => { cargarAccesos(); }, [cargarAccesos]);
+
+  // Cargar face-api.js
+  const cargarFaceApi = useCallback(async () => {
+    if (typeof window === 'undefined') return;
+    setFaceApiCargando(true);
+    
+    // @ts-ignore
+    if (window.faceapi) {
+      setFaceApiReady(true);
+      setFaceApiCargando(false);
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
+    script.onload = async () => {
+      try {
+        // @ts-ignore
+        const fa = window.faceapi;
+        const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+        await Promise.all([
+          fa.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+          fa.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+          fa.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
+        ]);
+        setFaceApiReady(true);
+      } catch {
+        setFaceApiReady(false);
+      }
+      setFaceApiCargando(false);
+    };
+    script.onerror = () => { setFaceApiCargando(false); };
+    document.head.appendChild(script);
+  }, []);
+
+  // Iniciar cámara
+  const iniciarCamara = useCallback(async () => {
+    try {
+      const s = await navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: 'user' }
+      });
+      streamRef.current = s;
+      if (videoRef.current) videoRef.current.srcObject = s;
+    } catch {
+      setResultado({ tipo: 'error', mensaje: 'No se pudo acceder a la cámara' });
+    }
+  }, []);
+
+  const detenerCamara = useCallback(() => {
+    if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+    streamRef.current?.getTracks().forEach(t => t.stop());
+    streamRef.current = null;
+  }, []);
+
+  // Activar modo facial
+  const activarFacial = useCallback(async () => {
+    setModo('facial');
+    setResultado({ tipo: null });
+    await iniciarCamara();
+    if (!faceApiReady) await cargarFaceApi();
+  }, [iniciarCamara, cargarFaceApi, faceApiReady]);
+
+  // Escanear frame y buscar rostro
+  const escanearFrame = useCallback(async () => {
+    if (!videoRef.current || !canvasRef.current || escaneando) return;
+    // @ts-ignore
+    if (!window.faceapi || !faceApiReady) return;
+
+    setEscaneando(true);
+    try {
+      const ctx = canvasRef.current.getContext('2d')!;
+      canvasRef.current.width = videoRef.current.videoWidth || 640;
+      canvasRef.current.height = videoRef.current.videoHeight || 480;
+      ctx.drawImage(videoRef.current, 0, 0);
+
+      const imgData = canvasRef.current.toDataURL('image/jpeg', 0.7);
+      const img = new Image();
+      img.src = imgData;
+      await new Promise(r => { img.onload = r; });
+
+      // @ts-ignore
+      const detection = await window.faceapi
+        .detectSingleFace(img)
+        .withFaceLandmarks()
+        .withFaceDescriptor();
+
+      if (detection) {
+        const descriptor = Array.from(detection.descriptor);
+        const res = await fetch('/api/asistencia/facial', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ descriptor }),
+        });
+        const data = await res.json();
+        
+        if (data.encontrado) {
+          setResultado({
+            tipo: data.planVigente ? 'bienvenido' : 'vencido',
+            usuario: data.usuario,
+            mensaje: data.mensaje,
+            planVigente: data.planVigente,
+          });
+          cargarAccesos();
+          if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
+          setTimeout(() => {
+            if (modo === 'facial' && streamRef.current) {
+              intervalRef.current = setInterval(escanearFrame, 3000);
+            }
+          }, 5000);
+        }
+      }
+    } catch {}
+    setEscaneando(false);
+  }, [faceApiReady, escaneando, modo, cargarAccesos]);
+
+  // Escaneo continuo
+  useEffect(() => {
+    if (modo === 'facial' && faceApiReady) {
+      intervalRef.current = setInterval(escanearFrame, 3000);
+      return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+    }
+  }, [modo, faceApiReady, escanearFrame]);
+
+  // Limpiar al cambiar modo
+  useEffect(() => {
+    if (modo !== 'facial') detenerCamara();
+  }, [modo, detenerCamara]);
+
+  // Registro manual por RUT
+  const registrarManual = async () => {
+    const rut = rutManual.trim();
+    if (!rut) return;
+
+    setCargando(true);
+    try {
+      const res = await fetch(`/api/usuarios?rut=${encodeURIComponent(rut)}`);
+      const usuario = await res.json();
+
+      if (!usuario || !usuario.id) {
+        setResultado({ tipo: 'no_encontrado', mensaje: 'Usuario no encontrado con ese RUT' });
+        setCargando(false);
+        return;
+      }
+
+      const asRes = await fetch('/api/asistencia', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ usuarioId: usuario.id, metodo: 'manual' }),
+      });
+      const asData = await asRes.json();
+
+      setResultado({
+        tipo: asData.planVigente ? 'bienvenido' : 'vencido',
+        usuario: asData.usuario || usuario,
+        mensaje: asData.mensaje,
+        planVigente: asData.planVigente,
+      });
+      setRutManual('');
+      cargarAccesos();
+    } catch {
+      setResultado({ tipo: 'error', mensaje: 'Error de conexión' });
+    }
+    setCargando(false);
+  };
+
+  const coloresResultado: Record<string, { bg: string; border: string; texto: string }> = {
+    bienvenido: { bg: 'rgba(0,224,150,0.1)', border: '#00e096', texto: '#00e096' },
+    vencido: { bg: 'rgba(255,170,0,0.1)', border: '#ffaa00', texto: '#ffaa00' },
+    no_encontrado: { bg: 'rgba(255,61,113,0.1)', border: '#ff3d71', texto: '#ff3d71' },
+    error: { bg: 'rgba(255,61,113,0.1)', border: '#ff3d71', texto: '#ff3d71' },
+  };
+
+  return (
+    <div style={{
+      minHeight: '100vh', background: '#0a0a0a', display: 'flex', flexDirection: 'column',
+    }}>
+      {/* Header */}
+      <header style={{
+        background: '#141414', borderBottom: '1px solid #1e1e1e',
+        padding: '1rem 2rem', display: 'flex', alignItems: 'center',
+        justifyContent: 'space-between',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+          <span style={{
+            fontSize: '2rem', fontWeight: 900, color: '#00e5ff',
+            letterSpacing: '-1px', textTransform: 'uppercase',
+          }}>CLUBFIT</span>
+          <div style={{ borderLeft: '1px solid #2a2a2a', paddingLeft: '1.5rem' }}>
+            <div style={{ color: '#f0f0f0', fontSize: '0.9rem' }}>
+              {new Date().toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' })}
+            </div>
+          </div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+          <span style={{
+            fontFamily: 'monospace', fontSize: '2rem', fontWeight: 700,
+            color: '#00e5ff', letterSpacing: '2px',
+          }}>{hora}</span>
+          <Link href="/admin" style={{
+            background: '#1e1e1e', color: '#888', border: '1px solid #2a2a2a',
+            borderRadius: '8px', padding: '0.4rem 1rem', textDecoration: 'none',
+            fontSize: '0.8rem',
+          }}>⚙ Admin</Link>
+        </div>
+      </header>
+
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        {/* Panel central */}
+        <main style={{ flex: 1, padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          
+          {/* Resultado de identificación */}
+          {resultado.tipo && (
+            <div style={{
+              background: coloresResultado[resultado.tipo].bg,
+              border: `2px solid ${coloresResultado[resultado.tipo].border}`,
+              borderRadius: '16px', padding: '1.5rem 2rem',
+              animation: 'fadeIn 0.3s ease',
+            }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+                {resultado.usuario?.foto && (
+                  <img src={resultado.usuario.foto} alt=""
+                    style={{ width: '70px', height: '70px', borderRadius: '50%', objectFit: 'cover', border: `3px solid ${coloresResultado[resultado.tipo].border}` }} />
+                )}
+                <div>
+                  <div style={{
+                    fontSize: '2rem',
+                    marginBottom: '0.3rem',
+                  }}>
+                    {resultado.tipo === 'bienvenido' ? '✅' : resultado.tipo === 'vencido' ? '⚠️' : '❌'}
+                  </div>
+                  <div style={{
+                    fontSize: '1.5rem', fontWeight: 800,
+                    color: coloresResultado[resultado.tipo].texto,
+                  }}>
+                    {resultado.mensaje}
+                  </div>
+                  {resultado.usuario && (
+                    <div style={{ color: '#888', marginTop: '0.3rem', fontSize: '0.9rem' }}>
+                      {resultado.usuario.rut} — Plan: {planLabel(resultado.usuario.plan_tipo)}
+                      {' '}— Vence: {formatDate(resultado.usuario.plan_vencimiento)}
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Modos de identificación */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', flex: 1 }}>
+            
+            {/* Reconocimiento Facial */}
+            <div style={{
+              background: '#141414', border: `2px solid ${modo === 'facial' ? '#00e5ff' : '#1e1e1e'}`,
+              borderRadius: '16px', padding: '1.5rem', display: 'flex', flexDirection: 'column',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <h2 style={{ color: '#00e5ff', fontSize: '1.1rem', fontWeight: 700 }}>
+                  🤳 Reconocimiento Facial
+                </h2>
+                {modo === 'facial' && (
+                  <button onClick={() => setModo('espera')} style={{
+                    background: 'none', border: '1px solid #2a2a2a', color: '#888',
+                    borderRadius: '6px', padding: '0.3rem 0.75rem', cursor: 'pointer',
+                    fontSize: '0.8rem',
+                  }}>✕ Detener</button>
+                )}
+              </div>
+
+              {modo !== 'facial' ? (
+                <div style={{
+                  flex: 1, display: 'flex', flexDirection: 'column',
+                  alignItems: 'center', justifyContent: 'center', gap: '1rem',
+                }}>
+                  <div style={{ fontSize: '4rem' }}>📷</div>
+                  <p style={{ color: '#888', textAlign: 'center', fontSize: '0.9rem' }}>
+                    Identifica a los socios automáticamente con su rostro
+                  </p>
+                  <button onClick={activarFacial} style={{
+                    background: '#00e5ff', color: '#0a0a0a', border: 'none',
+                    borderRadius: '10px', padding: '0.75rem 2rem', cursor: 'pointer',
+                    fontWeight: 700, fontSize: '1rem',
+                  }}>
+                    Activar Cámara
+                  </button>
+                </div>
+              ) : (
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  <div style={{ position: 'relative', borderRadius: '12px', overflow: 'hidden', flex: 1 }}>
+                    <video ref={videoRef} autoPlay playsInline muted style={{
+                      width: '100%', height: '100%', objectFit: 'cover', display: 'block',
+                    }} />
+                    {/* Overlay de escaneo */}
+                    <div style={{
+                      position: 'absolute', inset: 0, pointerEvents: 'none',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    }}>
+                      <div style={{
+                        border: '2px solid rgba(0,229,255,0.5)',
+                        borderRadius: '50%', width: '200px', height: '200px',
+                        animation: escaneando ? 'pulse-accent 1s infinite' : 'none',
+                      }} />
+                    </div>
+                    <canvas ref={canvasRef} style={{ display: 'none' }} />
+                  </div>
+                  <div style={{ textAlign: 'center', fontSize: '0.85rem' }}>
+                    {faceApiCargando ? (
+                      <span style={{ color: '#ffaa00' }}>⏳ Cargando modelos de IA...</span>
+                    ) : faceApiReady ? (
+                      <span style={{ color: '#00e096' }}>
+                        {escaneando ? '🔍 Escaneando...' : '✓ Esperando rostro...'}
+                      </span>
+                    ) : (
+                      <span style={{ color: '#888' }}>⚠️ Modelos no disponibles</span>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Registro Manual */}
+            <div style={{
+              background: '#141414', border: `2px solid ${modo === 'manual' ? '#00e5ff' : '#1e1e1e'}`,
+              borderRadius: '16px', padding: '1.5rem', display: 'flex', flexDirection: 'column',
+            }}>
+              <h2 style={{ color: '#00e5ff', fontSize: '1.1rem', fontWeight: 700, marginBottom: '1rem' }}>
+                ✍️ Registro Manual por RUT
+              </h2>
+              <div style={{
+                flex: 1, display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center', gap: '1.5rem',
+              }}>
+                <div style={{ fontSize: '3rem' }}>🪪</div>
+                <div style={{ width: '100%', maxWidth: '300px' }}>
+                  <label style={{
+                    display: 'block', color: '#888', fontSize: '0.85rem',
+                    marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.5px',
+                  }}>RUT del Socio</label>
+                  <input
+                    value={rutManual}
+                    onChange={e => setRutManual(formatearRut(e.target.value))}
+                    onKeyDown={e => e.key === 'Enter' && registrarManual()}
+                    placeholder="12.345.678-9"
+                    style={{
+                      width: '100%', background: '#1e1e1e', border: '1px solid #2a2a2a',
+                      borderRadius: '10px', padding: '1rem', color: '#f0f0f0',
+                      fontSize: '1.3rem', outline: 'none', textAlign: 'center',
+                      fontFamily: 'monospace', letterSpacing: '2px',
+                    }}
+                  />
+                </div>
+                <button
+                  onClick={registrarManual}
+                  disabled={cargando || !rutManual}
+                  style={{
+                    background: rutManual ? '#00e5ff' : '#1e1e1e',
+                    color: rutManual ? '#0a0a0a' : '#888',
+                    border: 'none', borderRadius: '10px',
+                    padding: '0.9rem 2.5rem', cursor: rutManual ? 'pointer' : 'not-allowed',
+                    fontWeight: 700, fontSize: '1rem', width: '100%', maxWidth: '300px',
+                    opacity: cargando ? 0.7 : 1,
+                  }}
+                >
+                  {cargando ? '⏳ Verificando...' : '→ Registrar Ingreso'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </main>
+
+        {/* Panel lateral — últimos accesos */}
+        <aside style={{
+          width: '280px', background: '#0d0d0d', borderLeft: '1px solid #1e1e1e',
+          padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem',
+          overflowY: 'auto',
+        }}>
+          <h3 style={{ color: '#888', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '1px' }}>
+            Últimos Accesos
+          </h3>
+          {ultimosAccesos.length === 0 ? (
+            <p style={{ color: '#444', fontSize: '0.85rem' }}>Sin registros aún</p>
+          ) : (
+            ultimosAccesos.map(a => (
+              <div key={a.id} style={{
+                background: '#141414', borderRadius: '10px', padding: '0.75rem',
+                border: `1px solid ${a.exitoso ? '#1a2a1a' : '#2a1a1a'}`,
+              }}>
+                <div style={{ fontWeight: 600, fontSize: '0.9rem', marginBottom: '0.2rem' }}>
+                  {a.nombre}
+                </div>
+                <div style={{ color: '#888', fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between' }}>
+                  <span>{a.metodo === 'facial' ? '🤳' : '✍️'} {a.metodo}</span>
+                  <span>{new Date(a.timestamp).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</span>
+                </div>
+              </div>
+            ))
+          )}
+        </aside>
+      </div>
+
+      <style>{`
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(-10px); }
+          to { opacity: 1; transform: translateY(0); }
+        }
+        @keyframes pulse-accent {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.4); }
+          50% { box-shadow: 0 0 0 15px rgba(0, 229, 255, 0); }
+        }
+      `}</style>
+    </div>
+  );
+}
