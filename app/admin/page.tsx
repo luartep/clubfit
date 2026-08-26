@@ -1,10 +1,12 @@
 'use client';
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import FormUsuario from '@/components/admin/FormUsuario';
 import { planLabel, estadoPlan, formatDate, mensajeVencimiento } from '@/lib/utils';
 
 export default function AdminPage() {
+  const router = useRouter();
   const [usuarios, setUsuarios] = useState<any[]>([]);
   const [cargando, setCargando] = useState(true);
   const [busqueda, setBusqueda] = useState('');
@@ -65,6 +67,15 @@ export default function AdminPage() {
     cargarUsuarios();
   };
 
+  const cerrarSesion = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    router.push('/login');
+  };
+
+  const descargarExcel = () => {
+    window.location.href = '/api/usuarios/exportar';
+  };
+
   // Stats
   const hoy = new Date();
   const activos = usuarios.filter(u => u.activo && new Date(u.plan_vencimiento) >= hoy).length;
@@ -92,13 +103,22 @@ export default function AdminPage() {
           <span style={{ color: '#444', fontSize: '1.2rem' }}>|</span>
           <span style={{ color: '#888', fontSize: '0.9rem' }}>Panel Admin</span>
         </div>
-        <Link href="/pantalla" style={{
-          background: '#1e1e1e', color: '#e50914', border: '1px solid #2a2a2a',
-          borderRadius: '8px', padding: '0.5rem 1.2rem', textDecoration: 'none',
-          fontSize: '0.85rem', fontWeight: 600,
-        }}>
-          → Pantalla Acceso
-        </Link>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <Link href="/pantalla" style={{
+            background: '#1e1e1e', color: '#e50914', border: '1px solid #2a2a2a',
+            borderRadius: '8px', padding: '0.5rem 1.2rem', textDecoration: 'none',
+            fontSize: '0.85rem', fontWeight: 600,
+          }}>
+            → Pantalla Acceso
+          </Link>
+          <button onClick={cerrarSesion} style={{
+            background: '#1e1e1e', color: '#888', border: '1px solid #2a2a2a',
+            borderRadius: '8px', padding: '0.5rem 1.2rem', cursor: 'pointer',
+            fontSize: '0.85rem', fontWeight: 600,
+          }}>
+            Cerrar sesión
+          </button>
+        </div>
       </header>
 
       <main style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
@@ -150,6 +170,16 @@ export default function AdminPage() {
                   fontSize: '0.95rem', outline: 'none', minWidth: '200px',
                 }}
               />
+              <button
+                onClick={descargarExcel}
+                style={{
+                  background: '#1e1e1e', color: '#ffffff', border: '1px solid #2a2a2a',
+                  borderRadius: '8px', padding: '0.75rem 1.5rem', cursor: 'pointer',
+                  fontWeight: 700, fontSize: '0.95rem', whiteSpace: 'nowrap',
+                }}
+              >
+                📥 Descargar Excel
+              </button>
               <button
                 onClick={() => { setMostrarForm(true); setUsuarioEditar(null); }}
                 style={{
