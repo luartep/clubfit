@@ -107,3 +107,30 @@ export function calcularVencimientoISO(inicio: string, planTipo: string): string
 export function hoyISO(): string {
   return new Date().toISOString().split('T')[0];
 }
+
+// Calcula la nueva fecha de vencimiento al renovar un plan.
+// Si el plan sigue vigente, extiende desde el vencimiento actual (no se pierden días pagados).
+// Si ya venció, el nuevo ciclo parte hoy.
+export function calcularRenovacion(vencimientoActual: string | Date, planTipo: string): {
+  nuevoInicio: string;
+  nuevoVencimiento: string;
+} {
+  const hoy = hoyISO();
+  const vencidoActual = new Date(vencimientoActual);
+  const baseEsHoy = vencidoActual < new Date();
+  const base = baseEsHoy ? hoy : new Date(vencimientoActual).toISOString().split('T')[0];
+  return {
+    nuevoInicio: baseEsHoy ? hoy : base,
+    nuevoVencimiento: calcularVencimientoISO(base, planTipo),
+  };
+}
+
+// Link de WhatsApp con un mensaje prellenado para avisarle a un socio sobre su plan.
+// Acepta teléfonos en cualquier formato (+56 9 1234 5678, 912345678, etc.) y los limpia.
+export function linkWhatsapp(telefono: string, mensaje: string): string | null {
+  const numero = (telefono || '').replace(/\D/g, '');
+  if (!numero) return null;
+  // Si viene sin código de país, asumimos Chile (+56) para un número móvil de 9 dígitos
+  const conCodigo = numero.length === 9 ? `56${numero}` : numero;
+  return `https://wa.me/${conCodigo}?text=${encodeURIComponent(mensaje)}`;
+}

@@ -3,7 +3,7 @@ import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import FormUsuario from '@/components/admin/FormUsuario';
-import { planLabel, estadoPlan, formatDate, mensajeVencimiento } from '@/lib/utils';
+import { planLabel, estadoPlan, formatDate, mensajeVencimiento, calcularRenovacion, linkWhatsapp } from '@/lib/utils';
 
 export default function AdminPage() {
   const router = useRouter();
@@ -15,6 +15,7 @@ export default function AdminPage() {
   const [asistencias, setAsistencias] = useState<any[]>([]);
   const [asistenciasHoy, setAsistenciasHoy] = useState<any[]>([]);
   const [tab, setTab] = useState<'usuarios' | 'asistencias'>('usuarios');
+  const [filtroEstado, setFiltroEstado] = useState<'todos' | 'activo' | 'proximo' | 'vencido'>('todos');
 
   const cargarUsuarios = useCallback(async () => {
     const res = await fetch(`/api/usuarios${busqueda ? `?buscar=${busqueda}` : ''}`);
@@ -72,8 +73,23 @@ export default function AdminPage() {
     router.push('/login');
   };
 
-  const descargarExcel = () => {
-    window.location.href = '/api/usuarios/exportar';
+  const descargarExcel = (tipo: 'usuarios' | 'asistencias') => {
+    window.location.href = tipo === 'usuarios' ? '/api/usuarios/exportar' : '/api/asistencia/exportar';
+  };
+
+  const renovarPlan = async (usuario: any) => {
+    const { nuevoInicio, nuevoVencimiento } = calcularRenovacion(usuario.plan_vencimiento, usuario.plan_tipo);
+    const confirmacion = confirm(
+      `Renovar el plan de ${usuario.nombre} (${planLabel(usuario.plan_tipo)})?\nNueva fecha de término: ${formatDate(nuevoVencimiento)}`
+    );
+    if (!confirmacion) return;
+
+    await fetch(`/api/usuarios/${usuario.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ planInicio: nuevoInicio, planVencimiento: nuevoVencimiento }),
+    });
+    cargarUsuarios();
   };
 
   const reiniciarConteo = async (todo: boolean) => {
@@ -92,18 +108,15 @@ export default function AdminPage() {
   };
 
   // Stats
-  const hoy = new Date();
-  const activos = usuarios.filter(u => u.activo && new Date(u.plan_vencimiento) >= hoy).length;
-  const vencidos = usuarios.filter(u => new Date(u.plan_vencimiento) < hoy).length;
+  const activos = usuarios.filter(u => estadoPlan(u.plan_vencimiento) === 'activo').length;
+  const porVencer = usuarios.filter(u => estadoPlan(u.plan_vencimiento) === 'proximo').length;
+  const vencidos = usuarios.filter(u => estadoPlan(u.plan_vencimiento) === 'vencido').length;
   const hoyAsistencias = asistenciasHoy.length;
 
-  const badge = (tipo: string) => {
-    const estado = estadoPlan(new Date().toISOString().split('T')[0]);
-    const colores: Record<string, string> = {
-      activo: '#00e096', proximo: '#ffaa00', vencido: '#ff3d71',
-    };
-    return colores[tipo] || '#888';
-  };
+  const usuariosMostrados = filtroEstado === 'todos'
+    ? usuarios
+    : usuarios.filter(u => estadoPlan(u.plan_vencimiento) === filtroEstado);
+
 
   return (
     <div style={{ minHeight: '100vh', background: '#0a0a0a' }}>
@@ -138,10 +151,11 @@ export default function AdminPage() {
 
       <main style={{ padding: '2rem', maxWidth: '1400px', margin: '0 auto' }}>
         {/* Stats */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
           {[
             { label: 'Total Usuarios', valor: usuarios.length, color: '#e50914', icon: '👥' },
             { label: 'Planes Activos', valor: activos, color: '#00e096', icon: '✅' },
+            { label: 'Por Vencer', valor: porVencer, color: '#ffaa00', icon: '⏳' },
             { label: 'Planes Vencidos', valor: vencidos, color: '#ff3d71', icon: '⚠️' },
             { label: 'Asistencias Hoy', valor: hoyAsistencias, color: '#ffaa00', icon: '📍' },
           ].map(s => (
@@ -173,6 +187,26 @@ export default function AdminPage() {
 
         {tab === 'usuarios' && (
           <>
+            {/* Filtros rápidos por estado */}
+            <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+              {([
+                { valor: 'todos', label: `Todos (${usuarios.length})`, color: '#e50914' },
+                { valor: 'activo', label: `Activos (${activos})`, color: '#00e096' },
+                { valor: 'proximo', label: `Por vencer (${porVencer})`, color: '#ffaa00' },
+                { valor: 'vencido', label: `Vencidos (${vencidos})`, color: '#ff3d71' },
+              ] as const).map(f => (
+                <button key={f.valor} onClick={() => setFiltroEstado(f.valor)} style={{
+                  background: filtroEstado === f.valor ? f.color : '#141414',
+                  color: filtroEstado === f.valor ? '#ffffff' : f.color,
+                  border: `1px solid ${f.color}`, borderRadius: '20px',
+                  padding: '0.4rem 1rem', cursor: 'pointer',
+                  fontWeight: 600, fontSize: '0.8rem',
+                }}>
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
             {/* Barra de búsqueda y acciones */}
             <div style={{ display: 'flex', gap: '1rem', marginBottom: '1.5rem', flexWrap: 'wrap' }}>
               <input
@@ -186,7 +220,7 @@ export default function AdminPage() {
                 }}
               />
               <button
-                onClick={descargarExcel}
+                onClick={() => descargarExcel('usuarios')}
                 style={{
                   background: '#1e1e1e', color: '#ffffff', border: '1px solid #2a2a2a',
                   borderRadius: '8px', padding: '0.75rem 1.5rem', cursor: 'pointer',
@@ -216,9 +250,9 @@ export default function AdminPage() {
                 <div style={{ padding: '3rem', textAlign: 'center', color: '#888' }}>
                   ⏳ Cargando usuarios...
                 </div>
-              ) : usuarios.length === 0 ? (
+              ) : usuariosMostrados.length === 0 ? (
                 <div style={{ padding: '3rem', textAlign: 'center', color: '#888' }}>
-                  No hay usuarios registrados aún.
+                  {usuarios.length === 0 ? 'No hay usuarios registrados aún.' : 'No hay usuarios con este filtro.'}
                 </div>
               ) : (
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
@@ -233,9 +267,13 @@ export default function AdminPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {usuarios.map((u, i) => {
+                    {usuariosMostrados.map((u, i) => {
                       const estado = estadoPlan(u.plan_vencimiento);
                       const colores: Record<string, string> = { activo: '#00e096', proximo: '#ffaa00', vencido: '#ff3d71' };
+                      const mensajeWa = estado === 'vencido'
+                        ? `Hola ${u.nombre}, tu plan en ClubFit venció el ${formatDate(u.plan_vencimiento)}. ¡Te esperamos para renovar! 💪`
+                        : `Hola ${u.nombre}, te recordamos que tu plan en ClubFit vence el ${formatDate(u.plan_vencimiento)}. ¡Te esperamos! 💪`;
+                      const wa = linkWhatsapp(u.telefono, mensajeWa);
                       return (
                         <tr key={u.id} style={{
                           borderBottom: '1px solid #1a1a1a',
@@ -284,6 +322,25 @@ export default function AdminPage() {
                           </td>
                           <td style={{ padding: '0.75rem 1rem' }}>
                             <div style={{ display: 'flex', gap: '0.5rem' }}>
+                              <button onClick={() => renovarPlan(u)} title="Renovar plan" style={{
+                                background: '#1e1e1e', color: '#00e096', border: '1px solid #00e096',
+                                borderRadius: '6px', padding: '0.3rem 0.75rem', cursor: 'pointer',
+                                fontSize: '0.8rem',
+                              }}>🔄</button>
+                              {wa && (
+                                <a
+                                  href={wa}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  title="Avisar por WhatsApp"
+                                  style={{
+                                    background: '#1e1e1e', color: '#25D366', border: '1px solid #25D366',
+                                    borderRadius: '6px', padding: '0.3rem 0.75rem', cursor: 'pointer',
+                                    fontSize: '0.8rem', textDecoration: 'none', display: 'inline-flex',
+                                    alignItems: 'center',
+                                  }}
+                                >💬</a>
+                              )}
                               <button onClick={() => { setUsuarioEditar(u); setMostrarForm(true); }} style={{
                                 background: '#1e1e1e', color: '#ffffff', border: '1px solid #2a2a2a',
                                 borderRadius: '6px', padding: '0.3rem 0.75rem', cursor: 'pointer',
@@ -316,7 +373,14 @@ export default function AdminPage() {
 
         {tab === 'asistencias' && (
           <>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginBottom: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem', marginBottom: '1rem', flexWrap: 'wrap' }}>
+              <button onClick={() => descargarExcel('asistencias')} style={{
+                background: '#1e1e1e', color: '#ffffff', border: '1px solid #2a2a2a',
+                borderRadius: '8px', padding: '0.6rem 1.2rem', cursor: 'pointer',
+                fontWeight: 700, fontSize: '0.85rem', whiteSpace: 'nowrap',
+              }}>
+                📥 Descargar Excel
+              </button>
               <button onClick={() => reiniciarConteo(false)} style={{
                 background: '#1e1e1e', color: '#ffaa00', border: '1px solid #ffaa00',
                 borderRadius: '8px', padding: '0.6rem 1.2rem', cursor: 'pointer',
