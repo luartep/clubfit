@@ -1,6 +1,6 @@
 'use client';
 import { useState } from 'react';
-import { validarRut, formatearRut, planLabel } from '@/lib/utils';
+import { validarRut, formatearRut, planLabel, calcularVencimientoISO, hoyISO } from '@/lib/utils';
 import CamaraCaptura from './CamaraCaptura';
 
 interface Props {
@@ -18,7 +18,7 @@ const PLANES = [
 
 const inputStyle: React.CSSProperties = {
   width: '100%', background: '#1e1e1e', border: '1px solid #2a2a2a',
-  borderRadius: '8px', padding: '0.75rem 1rem', color: '#f0f0f0',
+  borderRadius: '8px', padding: '0.75rem 1rem', color: '#ffffff',
   fontSize: '1rem', outline: 'none',
 };
 
@@ -28,13 +28,25 @@ const labelStyle: React.CSSProperties = {
 };
 
 export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Props) {
+  const inicioInicial = usuarioEditar?.plan_inicio
+    ? String(usuarioEditar.plan_inicio).split('T')[0]
+    : hoyISO();
+  const planInicialTipo = usuarioEditar?.plan_tipo || 'mensual';
+
   const [form, setForm] = useState({
     nombre: usuarioEditar?.nombre || '',
     rut: usuarioEditar?.rut || '',
     email: usuarioEditar?.email || '',
     telefono: usuarioEditar?.telefono || '',
-    planTipo: usuarioEditar?.plan_tipo || 'mensual',
+    planTipo: planInicialTipo,
+    planInicio: inicioInicial,
+    planVencimiento: usuarioEditar?.plan_vencimiento
+      ? String(usuarioEditar.plan_vencimiento).split('T')[0]
+      : calcularVencimientoISO(inicioInicial, planInicialTipo),
   });
+  // Mientras no se edite manualmente la fecha de término, se recalcula
+  // automáticamente al cambiar el plan o la fecha de ingreso.
+  const [vencimientoManual, setVencimientoManual] = useState(false);
   const [foto, setFoto] = useState<string>(usuarioEditar?.foto || '');
   const [fotoDescriptor, setFotoDescriptor] = useState<number[] | null>(
     usuarioEditar?.foto_descriptor ? JSON.parse(usuarioEditar.foto_descriptor) : null
@@ -48,10 +60,40 @@ export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Pro
     const { name, value } = e.target;
     if (name === 'rut') {
       setForm(f => ({ ...f, rut: formatearRut(value) }));
-    } else {
-      setForm(f => ({ ...f, [name]: value }));
+      setErrores(er => ({ ...er, [name]: '' }));
+      return;
     }
-    setErrores(e => ({ ...e, [name]: '' }));
+    if (name === 'planTipo') {
+      setForm(f => ({
+        ...f,
+        planTipo: value,
+        planVencimiento: vencimientoManual ? f.planVencimiento : calcularVencimientoISO(f.planInicio, value),
+      }));
+      setErrores(er => ({ ...er, planTipo: '' }));
+      return;
+    }
+    if (name === 'planInicio') {
+      setForm(f => ({
+        ...f,
+        planInicio: value,
+        planVencimiento: vencimientoManual ? f.planVencimiento : calcularVencimientoISO(value, f.planTipo),
+      }));
+      setErrores(er => ({ ...er, planInicio: '' }));
+      return;
+    }
+    if (name === 'planVencimiento') {
+      setVencimientoManual(true);
+      setForm(f => ({ ...f, planVencimiento: value }));
+      setErrores(er => ({ ...er, planVencimiento: '' }));
+      return;
+    }
+    setForm(f => ({ ...f, [name]: value }));
+    setErrores(er => ({ ...er, [name]: '' }));
+  };
+
+  const restablecerVencimientoAutomatico = () => {
+    setVencimientoManual(false);
+    setForm(f => ({ ...f, planVencimiento: calcularVencimientoISO(f.planInicio, f.planTipo) }));
   };
 
   const validar = () => {
@@ -63,6 +105,11 @@ export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Pro
       e.rut = 'RUT inválido';
     }
     if (!form.planTipo) e.planTipo = 'Selecciona un plan';
+    if (!form.planInicio) e.planInicio = 'La fecha de ingreso es requerida';
+    if (!form.planVencimiento) e.planVencimiento = 'La fecha de término es requerida';
+    if (form.planInicio && form.planVencimiento && form.planVencimiento < form.planInicio) {
+      e.planVencimiento = 'No puede ser anterior al ingreso';
+    }
     setErrores(e);
     return Object.keys(e).length === 0;
   };
@@ -125,7 +172,7 @@ export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Pro
         }}>
           {/* Header */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem' }}>
-            <h2 style={{ color: '#00e5ff', fontSize: '1.3rem', fontWeight: 700 }}>
+            <h2 style={{ color: '#e50914', fontSize: '1.3rem', fontWeight: 700 }}>
               {usuarioEditar ? '✏️ Editar Usuario' : '➕ Nuevo Usuario'}
             </h2>
             <button onClick={onCerrar} style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '1.5rem' }}>✕</button>
@@ -153,14 +200,14 @@ export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Pro
               )}
               <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                 <button onClick={() => setMostrarCamara(true)} style={{
-                  background: '#00e5ff', color: '#0a0a0a', border: 'none',
+                  background: '#e50914', color: '#ffffff', border: 'none',
                   borderRadius: '6px', padding: '0.5rem 1rem', fontWeight: 600,
                   cursor: 'pointer', fontSize: '0.85rem',
                 }}>
                   📷 Cámara
                 </button>
                 <label style={{
-                  background: '#1e1e1e', color: '#f0f0f0', border: '1px solid #2a2a2a',
+                  background: '#1e1e1e', color: '#ffffff', border: '1px solid #2a2a2a',
                   borderRadius: '6px', padding: '0.5rem 1rem', fontWeight: 600,
                   cursor: 'pointer', fontSize: '0.85rem',
                 }}>
@@ -210,6 +257,34 @@ export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Pro
             </div>
 
             <div>
+              <label style={labelStyle}>Fecha de Ingreso *</label>
+              <input type="date" name="planInicio" value={form.planInicio} onChange={handleChange} style={{
+                ...inputStyle, borderColor: errores.planInicio ? '#ff3d71' : '#2a2a2a', colorScheme: 'dark',
+              }} />
+              {errores.planInicio && <p style={{ color: '#ff3d71', fontSize: '0.8rem', marginTop: '0.3rem' }}>{errores.planInicio}</p>}
+            </div>
+
+            <div>
+              <label style={labelStyle}>Fecha de Término *</label>
+              <input type="date" name="planVencimiento" value={form.planVencimiento} onChange={handleChange} style={{
+                ...inputStyle, borderColor: errores.planVencimiento ? '#ff3d71' : '#2a2a2a', colorScheme: 'dark',
+              }} />
+              {errores.planVencimiento && <p style={{ color: '#ff3d71', fontSize: '0.8rem', marginTop: '0.3rem' }}>{errores.planVencimiento}</p>}
+              {vencimientoManual ? (
+                <button type="button" onClick={restablecerVencimientoAutomatico} style={{
+                  background: 'none', border: 'none', color: '#e50914', cursor: 'pointer',
+                  fontSize: '0.75rem', marginTop: '0.3rem', padding: 0, textDecoration: 'underline',
+                }}>
+                  ↺ Calcular automáticamente según el plan
+                </button>
+              ) : (
+                <p style={{ color: '#888', fontSize: '0.75rem', marginTop: '0.3rem' }}>
+                  Se calcula sola según el plan — puedes editarla si es necesario
+                </p>
+              )}
+            </div>
+
+            <div>
               <label style={labelStyle}>Email</label>
               <input name="email" value={form.email} onChange={handleChange} style={inputStyle}
                 placeholder="juan@ejemplo.com" type="email" />
@@ -233,14 +308,14 @@ export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Pro
 
           <div style={{ display: 'flex', gap: '1rem', marginTop: '1.5rem', justifyContent: 'flex-end' }}>
             <button onClick={onCerrar} style={{
-              background: '#1e1e1e', color: '#f0f0f0', border: '1px solid #2a2a2a',
+              background: '#1e1e1e', color: '#ffffff', border: '1px solid #2a2a2a',
               borderRadius: '8px', padding: '0.75rem 1.5rem', cursor: 'pointer',
               fontWeight: 600, fontSize: '0.95rem',
             }}>
               Cancelar
             </button>
             <button onClick={handleSubmit} disabled={enviando} style={{
-              background: '#00e5ff', color: '#0a0a0a', border: 'none',
+              background: '#e50914', color: '#ffffff', border: 'none',
               borderRadius: '8px', padding: '0.75rem 2rem', cursor: 'pointer',
               fontWeight: 700, fontSize: '0.95rem', opacity: enviando ? 0.7 : 1,
             }}>

@@ -15,7 +15,7 @@ export default function Home() {
         <h1 style={{
           fontSize: '4rem',
           fontWeight: 900,
-          color: '#00e5ff',
+          color: '#e50914',
           letterSpacing: '-2px',
           textTransform: 'uppercase',
         }}>CLUBFIT</h1>
@@ -25,8 +25,8 @@ export default function Home() {
       </div>
       <div style={{ display: 'flex', gap: '1rem' }}>
         <Link href="/admin" style={{
-          background: '#00e5ff',
-          color: '#0a0a0a',
+          background: '#e50914',
+          color: '#ffffff',
           padding: '1rem 2rem',
           borderRadius: '8px',
           fontWeight: 700,
@@ -39,7 +39,7 @@ export default function Home() {
         </Link>
         <Link href="/pantalla" style={{
           background: '#1e1e1e',
-          color: '#00e5ff',
+          color: '#e50914',
           padding: '1rem 2rem',
           borderRadius: '8px',
           fontWeight: 700,

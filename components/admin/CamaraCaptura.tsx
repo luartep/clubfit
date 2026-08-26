@@ -109,7 +109,7 @@ export default function CamaraCaptura({ onCaptura, onCerrar }: Props) {
         border: '1px solid #2a2a2a', maxWidth: '700px', width: '100%',
       }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem' }}>
-          <h3 style={{ color: '#00e5ff', fontSize: '1.2rem', fontWeight: 700 }}>📸 Captura de Foto</h3>
+          <h3 style={{ color: '#e50914', fontSize: '1.2rem', fontWeight: 700 }}>📸 Captura de Foto</h3>
           <button onClick={onCerrar} style={{ background: 'none', border: 'none', color: '#888', cursor: 'pointer', fontSize: '1.5rem' }}>✕</button>
         </div>
 
@@ -122,7 +122,7 @@ export default function CamaraCaptura({ onCaptura, onCerrar }: Props) {
               {/* Guía de encuadre */}
               <div style={{
                 position: 'absolute', inset: 0, pointerEvents: 'none',
-                border: '2px dashed rgba(0,229,255,0.3)', borderRadius: '50%',
+                border: '2px dashed rgba(229,9,20,0.3)', borderRadius: '50%',
                 margin: '15% 25%',
               }} />
             </div>
@@ -136,7 +136,7 @@ export default function CamaraCaptura({ onCaptura, onCerrar }: Props) {
 
             <div style={{ display: 'flex', gap: '1rem' }}>
               <button onClick={capturar} disabled={cargandoIA} style={{
-                background: '#00e5ff', color: '#0a0a0a', border: 'none',
+                background: '#e50914', color: '#ffffff', border: 'none',
                 borderRadius: '8px', padding: '0.75rem 2rem', fontWeight: 700,
                 cursor: 'pointer', fontSize: '1rem',
                 opacity: cargandoIA ? 0.6 : 1,
@@ -144,7 +144,7 @@ export default function CamaraCaptura({ onCaptura, onCerrar }: Props) {
                 {cargandoIA ? '⏳ Procesando...' : '📷 Capturar'}
               </button>
               <button onClick={onCerrar} style={{
-                background: '#1e1e1e', color: '#f0f0f0', border: '1px solid #2a2a2a',
+                background: '#1e1e1e', color: '#ffffff', border: '1px solid #2a2a2a',
                 borderRadius: '8px', padding: '0.75rem 2rem', fontWeight: 600,
                 cursor: 'pointer', fontSize: '1rem',
               }}>

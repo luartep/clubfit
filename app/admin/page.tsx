@@ -2,7 +2,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import FormUsuario from '@/components/admin/FormUsuario';
-import { planLabel, estadoPlan, formatDate } from '@/lib/utils';
+import { planLabel, estadoPlan, formatDate, mensajeVencimiento } from '@/lib/utils';
 
 export default function AdminPage() {
   const [usuarios, setUsuarios] = useState<any[]>([]);
@@ -71,12 +71,12 @@ export default function AdminPage() {
         justifyContent: 'space-between', position: 'sticky', top: 0, zIndex: 100,
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-          <span style={{ fontSize: '1.5rem', fontWeight: 900, color: '#00e5ff', letterSpacing: '-1px' }}>CLUBFIT</span>
+          <span style={{ fontSize: '1.5rem', fontWeight: 900, color: '#e50914', letterSpacing: '-1px' }}>CLUBFIT</span>
           <span style={{ color: '#444', fontSize: '1.2rem' }}>|</span>
           <span style={{ color: '#888', fontSize: '0.9rem' }}>Panel Admin</span>
         </div>
         <Link href="/pantalla" style={{
-          background: '#1e1e1e', color: '#00e5ff', border: '1px solid #2a2a2a',
+          background: '#1e1e1e', color: '#e50914', border: '1px solid #2a2a2a',
           borderRadius: '8px', padding: '0.5rem 1.2rem', textDecoration: 'none',
           fontSize: '0.85rem', fontWeight: 600,
         }}>
@@ -88,7 +88,7 @@ export default function AdminPage() {
         {/* Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: '1rem', marginBottom: '2rem' }}>
           {[
-            { label: 'Total Usuarios', valor: usuarios.length, color: '#00e5ff', icon: '👥' },
+            { label: 'Total Usuarios', valor: usuarios.length, color: '#e50914', icon: '👥' },
             { label: 'Planes Activos', valor: activos, color: '#00e096', icon: '✅' },
             { label: 'Planes Vencidos', valor: vencidos, color: '#ff3d71', icon: '⚠️' },
             { label: 'Asistencias Hoy', valor: hoyAsistencias, color: '#ffaa00', icon: '📍' },
@@ -108,8 +108,8 @@ export default function AdminPage() {
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
           {(['usuarios', 'asistencias'] as const).map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
-              background: tab === t ? '#00e5ff' : '#1e1e1e',
-              color: tab === t ? '#0a0a0a' : '#888',
+              background: tab === t ? '#e50914' : '#1e1e1e',
+              color: tab === t ? '#ffffff' : '#888',
               border: '1px solid #2a2a2a', borderRadius: '8px',
               padding: '0.6rem 1.5rem', cursor: 'pointer',
               fontWeight: 600, fontSize: '0.9rem', textTransform: 'capitalize',
@@ -129,14 +129,14 @@ export default function AdminPage() {
                 placeholder="🔍 Buscar por nombre o RUT..."
                 style={{
                   flex: 1, background: '#141414', border: '1px solid #2a2a2a',
-                  borderRadius: '8px', padding: '0.75rem 1rem', color: '#f0f0f0',
+                  borderRadius: '8px', padding: '0.75rem 1rem', color: '#ffffff',
                   fontSize: '0.95rem', outline: 'none', minWidth: '200px',
                 }}
               />
               <button
                 onClick={() => { setMostrarForm(true); setUsuarioEditar(null); }}
                 style={{
-                  background: '#00e5ff', color: '#0a0a0a', border: 'none',
+                  background: '#e50914', color: '#ffffff', border: 'none',
                   borderRadius: '8px', padding: '0.75rem 1.5rem', cursor: 'pointer',
                   fontWeight: 700, fontSize: '0.95rem', whiteSpace: 'nowrap',
                 }}
@@ -197,13 +197,16 @@ export default function AdminPage() {
                             <span style={{
                               background: '#1e1e1e', borderRadius: '6px',
                               padding: '0.25rem 0.75rem', fontSize: '0.85rem',
-                              color: '#00e5ff',
+                              color: '#e50914',
                             }}>
                               {planLabel(u.plan_tipo)}
                             </span>
                           </td>
                           <td style={{ padding: '0.75rem 1rem', color: '#888' }}>
-                            {formatDate(u.plan_vencimiento)}
+                            <div>{formatDate(u.plan_vencimiento)}</div>
+                            <div style={{ fontSize: '0.75rem', color: colores[estado], marginTop: '0.15rem' }}>
+                              {mensajeVencimiento(u.plan_vencimiento)}
+                            </div>
                           </td>
                           <td style={{ padding: '0.75rem 1rem' }}>
                             <span style={{
@@ -220,7 +223,7 @@ export default function AdminPage() {
                           <td style={{ padding: '0.75rem 1rem' }}>
                             <div style={{ display: 'flex', gap: '0.5rem' }}>
                               <button onClick={() => { setUsuarioEditar(u); setMostrarForm(true); }} style={{
-                                background: '#1e1e1e', color: '#f0f0f0', border: '1px solid #2a2a2a',
+                                background: '#1e1e1e', color: '#ffffff', border: '1px solid #2a2a2a',
                                 borderRadius: '6px', padding: '0.3rem 0.75rem', cursor: 'pointer',
                                 fontSize: '0.8rem',
                               }}>✏️</button>
@@ -279,7 +282,7 @@ export default function AdminPage() {
                     <td style={{ padding: '0.75rem 1rem' }}>
                       <span style={{
                         background: '#1e1e1e', borderRadius: '6px',
-                        padding: '0.2rem 0.6rem', fontSize: '0.8rem', color: '#00e5ff',
+                        padding: '0.2rem 0.6rem', fontSize: '0.8rem', color: '#e50914',
                       }}>
                         {a.metodo === 'facial' ? '🤳 Facial' : a.metodo === 'huella' ? '👆 Huella' : '✍️ Manual'}
                       </span>

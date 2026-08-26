@@ -1,7 +1,7 @@
 'use client';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { formatearRut, validarRut, estadoPlan, planLabel, formatDate } from '@/lib/utils';
+import { formatearRut, validarRut, estadoPlan, planLabel, formatDate, mensajeVencimiento } from '@/lib/utils';
 
 type Modo = 'espera' | 'facial' | 'manual';
 type ResultadoTipo = 'bienvenido' | 'vencido' | 'no_encontrado' | 'error' | null;
@@ -240,11 +240,11 @@ export default function PantallaPage() {
       }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
           <span style={{
-            fontSize: '2rem', fontWeight: 900, color: '#00e5ff',
+            fontSize: '2rem', fontWeight: 900, color: '#e50914',
             letterSpacing: '-1px', textTransform: 'uppercase',
           }}>CLUBFIT</span>
           <div style={{ borderLeft: '1px solid #2a2a2a', paddingLeft: '1.5rem' }}>
-            <div style={{ color: '#f0f0f0', fontSize: '0.9rem' }}>
+            <div style={{ color: '#ffffff', fontSize: '0.9rem' }}>
               {new Date().toLocaleDateString('es-CL', { weekday: 'long', day: 'numeric', month: 'long' })}
             </div>
           </div>
@@ -252,7 +252,7 @@ export default function PantallaPage() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
           <span style={{
             fontFamily: 'monospace', fontSize: '2rem', fontWeight: 700,
-            color: '#00e5ff', letterSpacing: '2px',
+            color: '#e50914', letterSpacing: '2px',
           }}>{hora}</span>
           <Link href="/admin" style={{
             background: '#1e1e1e', color: '#888', border: '1px solid #2a2a2a',
@@ -293,10 +293,18 @@ export default function PantallaPage() {
                     {resultado.mensaje}
                   </div>
                   {resultado.usuario && (
-                    <div style={{ color: '#888', marginTop: '0.3rem', fontSize: '0.9rem' }}>
-                      {resultado.usuario.rut} — Plan: {planLabel(resultado.usuario.plan_tipo)}
-                      {' '}— Vence: {formatDate(resultado.usuario.plan_vencimiento)}
-                    </div>
+                    <>
+                      <div style={{ color: '#888', marginTop: '0.3rem', fontSize: '0.9rem' }}>
+                        {resultado.usuario.rut} — Plan: {planLabel(resultado.usuario.plan_tipo)}
+                        {' '}— Vence: {formatDate(resultado.usuario.plan_vencimiento)}
+                      </div>
+                      <div style={{
+                        marginTop: '0.3rem', fontSize: '0.95rem', fontWeight: 700,
+                        color: resultado.planVigente ? '#e50914' : '#ffaa00',
+                      }}>
+                        {mensajeVencimiento(resultado.usuario.plan_vencimiento)}
+                      </div>
+                    </>
                   )}
                 </div>
               </div>
@@ -308,11 +316,11 @@ export default function PantallaPage() {
             
             {/* Reconocimiento Facial */}
             <div style={{
-              background: '#141414', border: `2px solid ${modo === 'facial' ? '#00e5ff' : '#1e1e1e'}`,
+              background: '#141414', border: `2px solid ${modo === 'facial' ? '#e50914' : '#1e1e1e'}`,
               borderRadius: '16px', padding: '1.5rem', display: 'flex', flexDirection: 'column',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                <h2 style={{ color: '#00e5ff', fontSize: '1.1rem', fontWeight: 700 }}>
+                <h2 style={{ color: '#e50914', fontSize: '1.1rem', fontWeight: 700 }}>
                   🤳 Reconocimiento Facial
                 </h2>
                 {modo === 'facial' && (
@@ -334,7 +342,7 @@ export default function PantallaPage() {
                     Identifica a los socios automáticamente con su rostro
                   </p>
                   <button onClick={activarFacial} style={{
-                    background: '#00e5ff', color: '#0a0a0a', border: 'none',
+                    background: '#e50914', color: '#ffffff', border: 'none',
                     borderRadius: '10px', padding: '0.75rem 2rem', cursor: 'pointer',
                     fontWeight: 700, fontSize: '1rem',
                   }}>
@@ -353,7 +361,7 @@ export default function PantallaPage() {
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
                     }}>
                       <div style={{
-                        border: '2px solid rgba(0,229,255,0.5)',
+                        border: '2px solid rgba(229,9,20,0.5)',
                         borderRadius: '50%', width: '200px', height: '200px',
                         animation: escaneando ? 'pulse-accent 1s infinite' : 'none',
                       }} />
@@ -377,10 +385,10 @@ export default function PantallaPage() {
 
             {/* Registro Manual */}
             <div style={{
-              background: '#141414', border: `2px solid ${modo === 'manual' ? '#00e5ff' : '#1e1e1e'}`,
+              background: '#141414', border: `2px solid ${modo === 'manual' ? '#e50914' : '#1e1e1e'}`,
               borderRadius: '16px', padding: '1.5rem', display: 'flex', flexDirection: 'column',
             }}>
-              <h2 style={{ color: '#00e5ff', fontSize: '1.1rem', fontWeight: 700, marginBottom: '1rem' }}>
+              <h2 style={{ color: '#e50914', fontSize: '1.1rem', fontWeight: 700, marginBottom: '1rem' }}>
                 ✍️ Registro Manual por RUT
               </h2>
               <div style={{
@@ -400,7 +408,7 @@ export default function PantallaPage() {
                     placeholder="12.345.678-9"
                     style={{
                       width: '100%', background: '#1e1e1e', border: '1px solid #2a2a2a',
-                      borderRadius: '10px', padding: '1rem', color: '#f0f0f0',
+                      borderRadius: '10px', padding: '1rem', color: '#ffffff',
                       fontSize: '1.3rem', outline: 'none', textAlign: 'center',
                       fontFamily: 'monospace', letterSpacing: '2px',
                     }}
@@ -410,8 +418,8 @@ export default function PantallaPage() {
                   onClick={registrarManual}
                   disabled={cargando || !rutManual}
                   style={{
-                    background: rutManual ? '#00e5ff' : '#1e1e1e',
-                    color: rutManual ? '#0a0a0a' : '#888',
+                    background: rutManual ? '#e50914' : '#1e1e1e',
+                    color: rutManual ? '#ffffff' : '#888',
                     border: 'none', borderRadius: '10px',
                     padding: '0.9rem 2.5rem', cursor: rutManual ? 'pointer' : 'not-allowed',
                     fontWeight: 700, fontSize: '1rem', width: '100%', maxWidth: '300px',
@@ -461,8 +469,8 @@ export default function PantallaPage() {
           to { opacity: 1; transform: translateY(0); }
         }
         @keyframes pulse-accent {
-          0%, 100% { box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.4); }
-          50% { box-shadow: 0 0 0 15px rgba(0, 229, 255, 0); }
+          0%, 100% { box-shadow: 0 0 0 0 rgba(229, 9, 20, 0.4); }
+          50% { box-shadow: 0 0 0 15px rgba(229, 9, 20, 0); }
         }
       `}</style>
     </div>

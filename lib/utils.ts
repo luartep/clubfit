@@ -73,3 +73,37 @@ export function formatDate(date: string | Date): string {
     day: '2-digit', month: '2-digit', year: 'numeric'
   });
 }
+
+// Días restantes hasta el vencimiento (negativo si ya venció)
+export function diasParaVencer(vencimiento: string | Date): number {
+  const hoy = new Date();
+  hoy.setHours(0, 0, 0, 0);
+  const v = new Date(vencimiento);
+  v.setHours(0, 0, 0, 0);
+  return Math.round((v.getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+// Mensaje legible de cuánto falta (o cuánto lleva vencido) el plan
+export function mensajeVencimiento(vencimiento: string | Date): string {
+  const dias = diasParaVencer(vencimiento);
+  if (dias < 0) {
+    const vencidoHace = Math.abs(dias);
+    return vencidoHace === 1 ? 'Venció hace 1 día' : `Venció hace ${vencidoHace} días`;
+  }
+  if (dias === 0) return 'Vence hoy';
+  if (dias === 1) return 'Vence mañana';
+  return `Vence en ${dias} días`;
+}
+
+// Suma la cantidad de meses (o años, para 'anual') del plan a una fecha de inicio,
+// devuelve el string YYYY-MM-DD listo para un <input type="date">
+export function calcularVencimientoISO(inicio: string, planTipo: string): string {
+  const fecha = inicio ? new Date(inicio + 'T00:00:00') : new Date();
+  const vencimiento = calcularVencimiento(fecha, planTipo);
+  return vencimiento.toISOString().split('T')[0];
+}
+
+// Fecha de hoy en formato YYYY-MM-DD, para valores por defecto de <input type="date">
+export function hoyISO(): string {
+  return new Date().toISOString().split('T')[0];
+}

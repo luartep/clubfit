@@ -68,14 +68,16 @@ export async function POST(req: NextRequest) {
   try {
     await ensureTables();
     const body = await req.json();
-    const { nombre, rut, email, telefono, foto, fotoDescriptor, planTipo } = body;
+    const { nombre, rut, email, telefono, foto, fotoDescriptor, planTipo, planInicio, planVencimiento } = body;
 
     if (!nombre || !rut || !planTipo) {
       return NextResponse.json({ error: 'Faltan campos obligatorios' }, { status: 400 });
     }
 
-    const inicio = new Date();
-    const vencimiento = calcularVencimiento(inicio, planTipo);
+    // Usa las fechas enviadas desde el formulario (ingreso / término elegidos por el admin).
+    // Si no llegan (ej. integraciones antiguas), calcula automáticamente desde hoy.
+    const inicio = planInicio ? new Date(planInicio + 'T00:00:00') : new Date();
+    const vencimiento = planVencimiento ? new Date(planVencimiento + 'T00:00:00') : calcularVencimiento(inicio, planTipo);
 
     const rows = await sql`
       INSERT INTO usuarios (nombre, rut, email, telefono, foto, foto_descriptor, plan_tipo, plan_inicio, plan_vencimiento)

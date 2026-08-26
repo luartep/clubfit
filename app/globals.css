@@ -5,11 +5,11 @@
   --surface: #141414;
   --surface2: #1e1e1e;
   --border: #2a2a2a;
-  --accent: #00e5ff;
+  --accent: #e50914;
   --accent2: #ff3d71;
   --success: #00e096;
   --warning: #ffaa00;
-  --text: #f0f0f0;
+  --text: #ffffff;
   --text-muted: #888;
 }
 
@@ -30,8 +30,8 @@ body {
 
 /* Animations */
 @keyframes pulse-accent {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(0, 229, 255, 0.4); }
-  50% { box-shadow: 0 0 0 8px rgba(0, 229, 255, 0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(229, 9, 20, 0.4); }
+  50% { box-shadow: 0 0 0 8px rgba(229, 9, 20, 0); }
 }
 
 @keyframes fadeIn {
