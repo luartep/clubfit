@@ -5,8 +5,13 @@ import { neon } from '@neondatabase/serverless';
 const sql = neon(process.env.POSTGRES_URL ?? process.env.DATABASE_URL!);
 
 // Mismo cooldown que el registro manual: evita marcar dos veces a la
-// misma persona en un lapso muy corto (el escaneo facial reintenta cada 3s).
+// misma persona en un lapso muy corto (el escaneo facial reintenta cada 1.5s).
 const COOLDOWN_MS = 2 * 60 * 1000; // 2 minutos
+
+// 0.6 es el umbral estándar recomendado por face-api.js para face-recognition-net
+// (distancia euclidiana). Con 0.5 se rechazaban caras válidas por variaciones
+// normales de luz/ángulo entre el registro y el ingreso.
+const UMBRAL = 0.6;
 
 function distanciaFacial(d1: number[], d2: number[]): number {
   if (!d1 || !d2 || d1.length !== d2.length) return Infinity;
@@ -30,7 +35,6 @@ export async function POST(req: NextRequest) {
 
     let mejorMatch = null;
     let menorDistancia = Infinity;
-    const UMBRAL = 0.5;
 
     for (const usuario of usuarios) {
       try {
@@ -80,7 +84,7 @@ export async function POST(req: NextRequest) {
       encontrado: true,
       usuario: mejorMatch,
       planVigente,
-      confianza: Math.round((1 - menorDistancia / UMBRAL) * 100),
+      confianza: Math.max(0, Math.round((1 - menorDistancia / UMBRAL) * 100)),
       mensaje: planVigente 
         ? `¡Bienvenido/a, ${mejorMatch.nombre}!` 
         : `Plan vencido — ${mejorMatch.nombre}`

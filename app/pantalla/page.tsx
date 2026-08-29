@@ -83,8 +83,10 @@ export default function PantallaPage() {
         // @ts-ignore
         const fa = window.faceapi;
         const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
+        // tinyFaceDetector: mismo tipo de descriptor facial, pero mucho más rápido
+        // que ssdMobilenetv1 para detectar la cara en tiempo real en un kiosco.
         await Promise.all([
-          fa.nets.ssdMobilenetv1.loadFromUri(MODEL_URL),
+          fa.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
           fa.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
           fa.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
         ]);
@@ -134,7 +136,8 @@ export default function PantallaPage() {
     setEscaneando(true);
     try {
       const ctx = canvasRef.current.getContext('2d')!;
-      canvasRef.current.width = videoRef.current.videoWidth || 640;
+      const anchoVideo = videoRef.current.videoWidth || 640;
+      canvasRef.current.width = anchoVideo;
       canvasRef.current.height = videoRef.current.videoHeight || 480;
       ctx.drawImage(videoRef.current, 0, 0);
 
@@ -144,10 +147,20 @@ export default function PantallaPage() {
       await new Promise(r => { img.onload = r; });
 
       // @ts-ignore
+      const opciones = new window.faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 });
+      // @ts-ignore
       const detection = await window.faceapi
-        .detectSingleFace(img)
+        .detectSingleFace(img, opciones)
         .withFaceLandmarks()
         .withFaceDescriptor();
+
+      // Si la cara está muy chica (persona lejos de la cámara), el descriptor
+      // sale de mala calidad — se ignora en silencio y se sigue escaneando,
+      // en vez de mandar un descriptor poco confiable al servidor.
+      if (detection && detection.detection.box.width < anchoVideo * 0.16) {
+        setEscaneando(false);
+        return;
+      }
 
       if (detection) {
         const descriptor = Array.from(detection.descriptor);
@@ -169,7 +182,7 @@ export default function PantallaPage() {
           if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
           setTimeout(() => {
             if (modo === 'facial' && streamRef.current) {
-              intervalRef.current = setInterval(escanearFrame, 3000);
+              intervalRef.current = setInterval(escanearFrame, 1500);
             }
           }, 5000);
         }
@@ -178,10 +191,10 @@ export default function PantallaPage() {
     setEscaneando(false);
   }, [faceApiReady, escaneando, modo, cargarAccesos]);
 
-  // Escaneo continuo
+  // Escaneo continuo — cada 1.5s, mucho más ágil que antes gracias al detector liviano
   useEffect(() => {
     if (modo === 'facial' && faceApiReady) {
-      intervalRef.current = setInterval(escanearFrame, 3000);
+      intervalRef.current = setInterval(escanearFrame, 1500);
       return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
     }
   }, [modo, faceApiReady, escanearFrame]);

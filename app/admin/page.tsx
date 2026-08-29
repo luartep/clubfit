@@ -14,7 +14,7 @@ export default function AdminPage() {
   const [usuarioEditar, setUsuarioEditar] = useState<any>(null);
   const [asistencias, setAsistencias] = useState<any[]>([]);
   const [asistenciasHoy, setAsistenciasHoy] = useState<any[]>([]);
-  const [tab, setTab] = useState<'usuarios' | 'asistencias'>('usuarios');
+  const [tab, setTab] = useState<'usuarios' | 'asistencias' | 'backup'>('usuarios');
   const [filtroEstado, setFiltroEstado] = useState<'todos' | 'activo' | 'proximo' | 'vencido'>('todos');
 
   const cargarUsuarios = useCallback(async () => {
@@ -75,6 +75,48 @@ export default function AdminPage() {
 
   const descargarExcel = (tipo: 'usuarios' | 'asistencias') => {
     window.location.href = tipo === 'usuarios' ? '/api/usuarios/exportar' : '/api/asistencia/exportar';
+  };
+
+  const descargarBackup = () => {
+    window.location.href = '/api/backup/exportar';
+  };
+
+  const [archivoBackup, setArchivoBackup] = useState<File | null>(null);
+  const [restaurando, setRestaurando] = useState(false);
+  const [resultadoRestore, setResultadoRestore] = useState<{ ok: boolean; mensaje: string } | null>(null);
+
+  const restaurarBackup = async () => {
+    if (!archivoBackup) return;
+    if (!confirm(
+      'Vas a restaurar un backup.\n\nLos usuarios se actualizarán por id y las asistencias que falten se agregarán. No se borra nada que ya exista.\n\n¿Continuar?'
+    )) return;
+
+    setRestaurando(true);
+    setResultadoRestore(null);
+    try {
+      const texto = await archivoBackup.text();
+      const datos = JSON.parse(texto);
+      const res = await fetch('/api/backup/restaurar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(datos),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setResultadoRestore({
+          ok: true,
+          mensaje: `Listo: ${data.usuariosRestaurados}/${data.totalUsuariosEnArchivo} usuarios y ${data.asistenciasRestauradas}/${data.totalAsistenciasEnArchivo} asistencias restauradas.`,
+        });
+        cargarUsuarios();
+        cargarAsistenciasHoy();
+      } else {
+        setResultadoRestore({ ok: false, mensaje: data.error || 'No se pudo restaurar el backup.' });
+      }
+    } catch {
+      setResultadoRestore({ ok: false, mensaje: 'El archivo no es un backup válido (JSON inválido).' });
+    } finally {
+      setRestaurando(false);
+    }
   };
 
   const renovarPlan = async (usuario: any) => {
@@ -172,7 +214,7 @@ export default function AdminPage() {
 
         {/* Tabs */}
         <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1.5rem' }}>
-          {(['usuarios', 'asistencias'] as const).map(t => (
+          {(['usuarios', 'asistencias', 'backup'] as const).map(t => (
             <button key={t} onClick={() => setTab(t)} style={{
               background: tab === t ? '#e50914' : '#1e1e1e',
               color: tab === t ? '#ffffff' : '#888',
@@ -180,7 +222,7 @@ export default function AdminPage() {
               padding: '0.6rem 1.5rem', cursor: 'pointer',
               fontWeight: 600, fontSize: '0.9rem', textTransform: 'capitalize',
             }}>
-              {t === 'usuarios' ? '👥 Usuarios' : '📋 Historial de Accesos'}
+              {t === 'usuarios' ? '👥 Usuarios' : t === 'asistencias' ? '📋 Historial de Accesos' : '🛡️ Seguridad y Backup'}
             </button>
           ))}
         </div>
@@ -448,6 +490,75 @@ export default function AdminPage() {
             </table>
             </div>
           </>
+        )}
+
+        {tab === 'backup' && (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem', maxWidth: '700px' }}>
+            {/* Backup */}
+            <div style={{ background: '#141414', border: '1px solid #1e1e1e', borderRadius: '12px', padding: '1.5rem' }}>
+              <h3 style={{ color: '#ffffff', fontSize: '1.1rem', marginBottom: '0.5rem' }}>💾 Backup completo</h3>
+              <p style={{ color: '#888', fontSize: '0.9rem', marginBottom: '1rem' }}>
+                Descarga un archivo con todos los usuarios y todo el historial de asistencias.
+                Guárdalo en un lugar seguro (tu computador, Google Drive, etc.) por si necesitas
+                restaurar la información más adelante.
+              </p>
+              <button onClick={descargarBackup} style={{
+                background: '#e50914', color: '#ffffff', border: 'none',
+                borderRadius: '8px', padding: '0.75rem 1.5rem', cursor: 'pointer',
+                fontWeight: 700, fontSize: '0.95rem',
+              }}>
+                💾 Descargar Backup Completo
+              </button>
+            </div>
+
+            {/* Restaurar */}
+            <div style={{ background: '#141414', border: '1px solid #1e1e1e', borderRadius: '12px', padding: '1.5rem' }}>
+              <h3 style={{ color: '#ffffff', fontSize: '1.1rem', marginBottom: '0.5rem' }}>📤 Restaurar desde backup</h3>
+              <p style={{ color: '#888', fontSize: '0.9rem', marginBottom: '1rem' }}>
+                Sube un archivo de backup generado por esta misma opción. Es seguro repetirlo:
+                actualiza los usuarios existentes y agrega solo las asistencias que falten,
+                sin borrar nada que ya esté en la base de datos.
+              </p>
+              <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+                <input
+                  type="file"
+                  accept=".json,application/json"
+                  onChange={e => { setArchivoBackup(e.target.files?.[0] || null); setResultadoRestore(null); }}
+                  style={{ color: '#ccc', fontSize: '0.85rem' }}
+                />
+                <button
+                  onClick={restaurarBackup}
+                  disabled={!archivoBackup || restaurando}
+                  style={{
+                    background: '#1e1e1e', color: '#ffaa00', border: '1px solid #ffaa00',
+                    borderRadius: '8px', padding: '0.6rem 1.2rem', cursor: archivoBackup ? 'pointer' : 'default',
+                    fontWeight: 700, fontSize: '0.85rem', opacity: archivoBackup && !restaurando ? 1 : 0.5,
+                  }}
+                >
+                  {restaurando ? '⏳ Restaurando...' : '📤 Restaurar Backup'}
+                </button>
+              </div>
+              {resultadoRestore && (
+                <p style={{
+                  marginTop: '1rem', fontSize: '0.85rem',
+                  color: resultadoRestore.ok ? '#00e096' : '#ff3d71',
+                }}>
+                  {resultadoRestore.ok ? '✅ ' : '❌ '}{resultadoRestore.mensaje}
+                </p>
+              )}
+            </div>
+
+            {/* Info de seguridad */}
+            <div style={{ background: '#141414', border: '1px solid #1e1e1e', borderRadius: '12px', padding: '1.5rem' }}>
+              <h3 style={{ color: '#ffffff', fontSize: '1.1rem', marginBottom: '0.5rem' }}>🛡️ Seguridad de la cuenta</h3>
+              <ul style={{ color: '#888', fontSize: '0.9rem', lineHeight: 1.8, paddingLeft: '1.2rem', margin: 0 }}>
+                <li>El panel admin está protegido con usuario y clave, y bloquea el acceso por 15 minutos tras 5 intentos fallidos seguidos.</li>
+                <li>Solo una sesión iniciada puede editar usuarios, borrar historial o restaurar backups — la pantalla de acceso del gimnasio sigue funcionando sin login.</li>
+                <li>Neon (tu base de datos) también guarda sus propias copias de seguridad automáticas — revisa el panel de Neon para restauración a un punto en el tiempo si lo necesitas.</li>
+                <li>Recomendado: cambia las credenciales por defecto (<code>ADMIN_USER</code>, <code>ADMIN_PASS</code>, <code>ADMIN_SESSION_SECRET</code>) en las variables de entorno de Vercel.</li>
+              </ul>
+            </div>
+          </div>
         )}
       </main>
 
