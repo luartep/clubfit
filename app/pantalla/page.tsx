@@ -1,7 +1,7 @@
 'use client';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { formatearRut, validarRut, estadoPlan, planLabel, formatDate, mensajeVencimiento } from '@/lib/utils';
+import { formatearRut, validarRut, estadoPlan, planLabel, formatDate, diasParaVencer } from '@/lib/utils';
 
 type Modo = 'espera' | 'facial' | 'manual';
 type ResultadoTipo = 'bienvenido' | 'vencido' | 'duplicado' | 'no_encontrado' | 'error' | null;
@@ -249,6 +249,20 @@ export default function PantallaPage() {
     error: { bg: 'rgba(255,61,113,0.1)', border: '#ff3d71', texto: '#ff3d71' },
   };
 
+  // Color de los días restantes del plan: verde con margen, amarillo cerca del
+  // vencimiento (10 días o menos) y rojo cuando ya se cumplió (0 o vencido).
+  const colorDias = (dias: number) => {
+    if (dias <= 0) return '#ff3d71';
+    if (dias <= 10) return '#ffaa00';
+    return '#00e096';
+  };
+
+  const textoDias = (dias: number) => {
+    if (dias < 0) return `Tu plan venció hace ${Math.abs(dias)} día${Math.abs(dias) === 1 ? '' : 's'}`;
+    if (dias === 0) return 'Tu plan vence hoy';
+    return `Te quedan ${dias} día${dias === 1 ? '' : 's'} de tu plan`;
+  };
+
   return (
     <div style={{
       minHeight: '100vh', background: '#0a0a0a', display: 'flex', flexDirection: 'column',
@@ -292,40 +306,54 @@ export default function PantallaPage() {
             <div style={{
               background: coloresResultado[resultado.tipo].bg,
               border: `2px solid ${coloresResultado[resultado.tipo].border}`,
-              borderRadius: '16px', padding: '1.5rem 2rem',
+              borderRadius: '16px', padding: '2rem 2.5rem',
               animation: 'fadeIn 0.3s ease',
             }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
                 {resultado.usuario?.foto && (
                   <img src={resultado.usuario.foto} alt=""
-                    style={{ width: '70px', height: '70px', borderRadius: '50%', objectFit: 'cover', border: `3px solid ${coloresResultado[resultado.tipo].border}` }} />
+                    style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover', border: `3px solid ${coloresResultado[resultado.tipo].border}`, flexShrink: 0 }} />
                 )}
                 <div>
-                  <div style={{
-                    fontSize: '2rem',
-                    marginBottom: '0.3rem',
-                  }}>
-                    {resultado.tipo === 'bienvenido' ? '✅' : resultado.tipo === 'vencido' ? '⚠️' : resultado.tipo === 'duplicado' ? '🕒' : '❌'}
-                  </div>
-                  <div style={{
-                    fontSize: '1.5rem', fontWeight: 800,
-                    color: coloresResultado[resultado.tipo].texto,
-                  }}>
-                    {resultado.mensaje}
-                  </div>
-                  {resultado.usuario && (
+                  {resultado.usuario ? (
                     <>
-                      <div style={{ color: '#888', marginTop: '0.3rem', fontSize: '0.9rem' }}>
+                      {/* Bienvenida grande y motivacional */}
+                      <div style={{
+                        fontSize: '2.5rem', fontWeight: 900, lineHeight: 1.15,
+                        color: coloresResultado[resultado.tipo].texto,
+                      }}>
+                        {resultado.tipo === 'duplicado'
+                          ? `${resultado.usuario.nombre}`
+                          : `¡Bienvenid@, ${resultado.usuario.nombre}!`}
+                      </div>
+                      <div style={{ fontSize: '1.3rem', fontWeight: 600, color: '#ffffff', marginTop: '0.2rem' }}>
+                        {resultado.tipo === 'bienvenido' && 'a romper tus límites 💪'}
+                        {resultado.tipo === 'vencido' && '⚠️ tu plan está vencido'}
+                        {resultado.tipo === 'duplicado' && 'ya registró su ingreso hace instantes 🕒'}
+                      </div>
+
+                      {/* Días restantes del plan, coloreados según cuánto queda */}
+                      {resultado.tipo !== 'duplicado' && (
+                        <div style={{
+                          marginTop: '0.9rem', fontSize: '1.8rem', fontWeight: 800,
+                          color: colorDias(diasParaVencer(resultado.usuario.plan_vencimiento)),
+                        }}>
+                          {textoDias(diasParaVencer(resultado.usuario.plan_vencimiento))}
+                        </div>
+                      )}
+
+                      <div style={{ color: '#888', marginTop: '0.6rem', fontSize: '0.9rem' }}>
                         {resultado.usuario.rut} — Plan: {planLabel(resultado.usuario.plan_tipo)}
                         {' '}— Vence: {formatDate(resultado.usuario.plan_vencimiento)}
                       </div>
-                      <div style={{
-                        marginTop: '0.3rem', fontSize: '0.95rem', fontWeight: 700,
-                        color: resultado.planVigente ? '#e50914' : '#ffaa00',
-                      }}>
-                        {mensajeVencimiento(resultado.usuario.plan_vencimiento)}
-                      </div>
                     </>
+                  ) : (
+                    <div style={{
+                      fontSize: '1.6rem', fontWeight: 800,
+                      color: coloresResultado[resultado.tipo].texto,
+                    }}>
+                      {resultado.mensaje}
+                    </div>
                   )}
                 </div>
               </div>
@@ -333,7 +361,7 @@ export default function PantallaPage() {
           )}
 
           {/* Modos de identificación */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', flex: 1 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '1.5rem', flex: 1 }}>
             
             {/* Reconocimiento Facial */}
             <div style={{
@@ -408,20 +436,20 @@ export default function PantallaPage() {
             {/* Registro Manual */}
             <div style={{
               background: '#141414', border: `2px solid ${modo === 'manual' ? '#e50914' : '#1e1e1e'}`,
-              borderRadius: '16px', padding: '1.5rem', display: 'flex', flexDirection: 'column',
+              borderRadius: '16px', padding: '1rem', display: 'flex', flexDirection: 'column',
             }}>
-              <h2 style={{ color: '#e50914', fontSize: '1.1rem', fontWeight: 700, marginBottom: '1rem' }}>
+              <h2 style={{ color: '#e50914', fontSize: '0.9rem', fontWeight: 700, marginBottom: '0.5rem' }}>
                 ✍️ Registro Manual por RUT
               </h2>
               <div style={{
                 flex: 1, display: 'flex', flexDirection: 'column',
-                alignItems: 'center', justifyContent: 'center', gap: '1.5rem',
+                alignItems: 'center', justifyContent: 'center', gap: '0.85rem',
               }}>
-                <div style={{ fontSize: '3rem' }}>🪪</div>
-                <div style={{ width: '100%', maxWidth: '300px' }}>
+                <div style={{ fontSize: '1.8rem' }}>🪪</div>
+                <div style={{ width: '100%', maxWidth: '220px' }}>
                   <label style={{
-                    display: 'block', color: '#888', fontSize: '0.85rem',
-                    marginBottom: '0.5rem', textTransform: 'uppercase', letterSpacing: '0.5px',
+                    display: 'block', color: '#888', fontSize: '0.7rem',
+                    marginBottom: '0.35rem', textTransform: 'uppercase', letterSpacing: '0.5px',
                   }}>RUT del Socio</label>
                   <input
                     value={rutManual}
@@ -430,9 +458,9 @@ export default function PantallaPage() {
                     placeholder="12.345.678-9"
                     style={{
                       width: '100%', background: '#1e1e1e', border: '1px solid #2a2a2a',
-                      borderRadius: '10px', padding: '1rem', color: '#ffffff',
-                      fontSize: '1.3rem', outline: 'none', textAlign: 'center',
-                      fontFamily: 'monospace', letterSpacing: '2px',
+                      borderRadius: '8px', padding: '0.6rem', color: '#ffffff',
+                      fontSize: '1rem', outline: 'none', textAlign: 'center',
+                      fontFamily: 'monospace', letterSpacing: '1.5px', boxSizing: 'border-box',
                     }}
                   />
                 </div>
@@ -442,9 +470,9 @@ export default function PantallaPage() {
                   style={{
                     background: rutManual ? '#e50914' : '#1e1e1e',
                     color: rutManual ? '#ffffff' : '#888',
-                    border: 'none', borderRadius: '10px',
-                    padding: '0.9rem 2.5rem', cursor: rutManual ? 'pointer' : 'not-allowed',
-                    fontWeight: 700, fontSize: '1rem', width: '100%', maxWidth: '300px',
+                    border: 'none', borderRadius: '8px',
+                    padding: '0.6rem 1.5rem', cursor: rutManual ? 'pointer' : 'not-allowed',
+                    fontWeight: 700, fontSize: '0.85rem', width: '100%', maxWidth: '220px',
                     opacity: cargando ? 0.7 : 1,
                   }}
                 >
