@@ -37,13 +37,13 @@ export default function PantallaPage() {
     return () => clearInterval(id);
   }, []);
 
-  // Auto-limpiar resultado después de 5 segundos
+  // Auto-limpiar resultado después de 15 segundos
   useEffect(() => {
     if (resultado.tipo) {
       const t = setTimeout(() => {
         setResultado({ tipo: null });
         if (modo === 'facial') setModo('facial'); // mantiene cámara
-      }, 5000);
+      }, 15000);
       return () => clearTimeout(t);
     }
   }, [resultado]);
@@ -184,7 +184,7 @@ export default function PantallaPage() {
             if (modo === 'facial' && streamRef.current) {
               intervalRef.current = setInterval(escanearFrame, 1500);
             }
-          }, 5000);
+          }, 15000);
         }
       }
     } catch {}
@@ -302,17 +302,25 @@ export default function PantallaPage() {
         <main style={{ flex: 1, padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           
           {/* Resultado de identificación */}
-          {resultado.tipo && (
+          {resultado.tipo && (() => {
+            // El caso "duplicado" (ya marcó hace poco) se ve igual que un ingreso
+            // normal — verde o ámbar según si el plan sigue vigente — en vez de un
+            // color neutro aparte.
+            const estiloTipo = resultado.tipo === 'duplicado'
+              ? (resultado.planVigente ? 'bienvenido' : 'vencido')
+              : resultado.tipo;
+            const estilo = coloresResultado[estiloTipo];
+            return (
             <div style={{
-              background: coloresResultado[resultado.tipo].bg,
-              border: `2px solid ${coloresResultado[resultado.tipo].border}`,
+              background: estilo.bg,
+              border: `2px solid ${estilo.border}`,
               borderRadius: '16px', padding: '2rem 2.5rem',
               animation: 'fadeIn 0.3s ease',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
                 {resultado.usuario?.foto && (
                   <img src={resultado.usuario.foto} alt=""
-                    style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover', border: `3px solid ${coloresResultado[resultado.tipo].border}`, flexShrink: 0 }} />
+                    style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover', border: `3px solid ${estilo.border}`, flexShrink: 0 }} />
                 )}
                 <div>
                   {resultado.usuario ? (
@@ -320,27 +328,21 @@ export default function PantallaPage() {
                       {/* Bienvenida grande y motivacional */}
                       <div style={{
                         fontSize: '2.5rem', fontWeight: 900, lineHeight: 1.15,
-                        color: coloresResultado[resultado.tipo].texto,
+                        color: estilo.texto,
                       }}>
-                        {resultado.tipo === 'duplicado'
-                          ? `${resultado.usuario.nombre}`
-                          : `¡Bienvenid@, ${resultado.usuario.nombre}!`}
+                        ¡Bienvenid@, {resultado.usuario.nombre}!
                       </div>
                       <div style={{ fontSize: '1.3rem', fontWeight: 600, color: '#ffffff', marginTop: '0.2rem' }}>
-                        {resultado.tipo === 'bienvenido' && 'a romper tus límites 💪'}
-                        {resultado.tipo === 'vencido' && '⚠️ tu plan está vencido'}
-                        {resultado.tipo === 'duplicado' && 'ya registró su ingreso hace instantes 🕒'}
+                        {resultado.planVigente ? 'a romper tus límites 💪' : '⚠️ tu plan está vencido'}
                       </div>
 
-                      {/* Días restantes del plan, coloreados según cuánto queda */}
-                      {resultado.tipo !== 'duplicado' && (
-                        <div style={{
-                          marginTop: '0.9rem', fontSize: '1.8rem', fontWeight: 800,
-                          color: colorDias(diasParaVencer(resultado.usuario.plan_vencimiento)),
-                        }}>
-                          {textoDias(diasParaVencer(resultado.usuario.plan_vencimiento))}
-                        </div>
-                      )}
+                      {/* Días restantes del plan, coloreados según cuánto queda — siempre visible */}
+                      <div style={{
+                        marginTop: '0.9rem', fontSize: '2.2rem', fontWeight: 800,
+                        color: colorDias(diasParaVencer(resultado.usuario.plan_vencimiento)),
+                      }}>
+                        {textoDias(diasParaVencer(resultado.usuario.plan_vencimiento))}
+                      </div>
 
                       <div style={{ color: '#888', marginTop: '0.6rem', fontSize: '0.9rem' }}>
                         {resultado.usuario.rut} — Plan: {planLabel(resultado.usuario.plan_tipo)}
@@ -350,7 +352,7 @@ export default function PantallaPage() {
                   ) : (
                     <div style={{
                       fontSize: '1.6rem', fontWeight: 800,
-                      color: coloresResultado[resultado.tipo].texto,
+                      color: estilo.texto,
                     }}>
                       {resultado.mensaje}
                     </div>
@@ -358,15 +360,17 @@ export default function PantallaPage() {
                 </div>
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* Modos de identificación */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '1.5rem', flex: 1 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 0.8fr', gap: '1.5rem', flex: 1, alignItems: 'start' }}>
             
             {/* Reconocimiento Facial */}
             <div style={{
               background: '#141414', border: `2px solid ${modo === 'facial' ? '#e50914' : '#1e1e1e'}`,
               borderRadius: '16px', padding: '1.5rem', display: 'flex', flexDirection: 'column',
+              alignSelf: 'stretch', minHeight: '420px',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                 <h2 style={{ color: '#e50914', fontSize: '1.1rem', fontWeight: 700 }}>
@@ -433,50 +437,44 @@ export default function PantallaPage() {
               )}
             </div>
 
-            {/* Registro Manual */}
+            {/* Registro Manual — intencionalmente muy compacto: se usa poco,
+                toda la prioridad visual es para el texto de bienvenida y el
+                reconocimiento facial */}
             <div style={{
               background: '#141414', border: `2px solid ${modo === 'manual' ? '#e50914' : '#1e1e1e'}`,
-              borderRadius: '16px', padding: '1rem', display: 'flex', flexDirection: 'column',
+              borderRadius: '12px', padding: '0.75rem', display: 'flex', flexDirection: 'column',
+              alignSelf: 'start', gap: '0.5rem',
             }}>
-              <h2 style={{ color: '#e50914', fontSize: '0.9rem', fontWeight: 700, marginBottom: '0.5rem' }}>
-                ✍️ Registro Manual por RUT
+              <h2 style={{ color: '#e50914', fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Registro Manual (RUT)
               </h2>
-              <div style={{
-                flex: 1, display: 'flex', flexDirection: 'column',
-                alignItems: 'center', justifyContent: 'center', gap: '0.85rem',
-              }}>
-                <div style={{ fontSize: '1.8rem' }}>🪪</div>
-                <div style={{ width: '100%', maxWidth: '220px' }}>
-                  <label style={{
-                    display: 'block', color: '#888', fontSize: '0.7rem',
-                    marginBottom: '0.35rem', textTransform: 'uppercase', letterSpacing: '0.5px',
-                  }}>RUT del Socio</label>
-                  <input
-                    value={rutManual}
-                    onChange={e => setRutManual(formatearRut(e.target.value))}
-                    onKeyDown={e => e.key === 'Enter' && registrarManual()}
-                    placeholder="12.345.678-9"
-                    style={{
-                      width: '100%', background: '#1e1e1e', border: '1px solid #2a2a2a',
-                      borderRadius: '8px', padding: '0.6rem', color: '#ffffff',
-                      fontSize: '1rem', outline: 'none', textAlign: 'center',
-                      fontFamily: 'monospace', letterSpacing: '1.5px', boxSizing: 'border-box',
-                    }}
-                  />
-                </div>
+              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+                <input
+                  value={rutManual}
+                  onChange={e => setRutManual(formatearRut(e.target.value))}
+                  onKeyDown={e => e.key === 'Enter' && registrarManual()}
+                  placeholder="12.345.678-9"
+                  style={{
+                    flex: 1, minWidth: 0, background: '#1e1e1e', border: '1px solid #2a2a2a',
+                    borderRadius: '6px', padding: '0.4rem 0.5rem', color: '#ffffff',
+                    fontSize: '0.8rem', outline: 'none', textAlign: 'center',
+                    fontFamily: 'monospace', letterSpacing: '0.5px', boxSizing: 'border-box',
+                  }}
+                />
                 <button
                   onClick={registrarManual}
                   disabled={cargando || !rutManual}
+                  title="Registrar ingreso"
                   style={{
                     background: rutManual ? '#e50914' : '#1e1e1e',
                     color: rutManual ? '#ffffff' : '#888',
-                    border: 'none', borderRadius: '8px',
-                    padding: '0.6rem 1.5rem', cursor: rutManual ? 'pointer' : 'not-allowed',
-                    fontWeight: 700, fontSize: '0.85rem', width: '100%', maxWidth: '220px',
+                    border: 'none', borderRadius: '6px',
+                    padding: '0.4rem 0.7rem', cursor: rutManual ? 'pointer' : 'not-allowed',
+                    fontWeight: 700, fontSize: '0.8rem', flexShrink: 0,
                     opacity: cargando ? 0.7 : 1,
                   }}
                 >
-                  {cargando ? '⏳ Verificando...' : '→ Registrar Ingreso'}
+                  {cargando ? '⏳' : '→'}
                 </button>
               </div>
             </div>
