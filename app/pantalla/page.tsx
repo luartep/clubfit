@@ -18,6 +18,7 @@ export default function PantallaPage() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<any>(null);
+  const imgRef = useRef<HTMLImageElement | null>(null); // se reutiliza en cada escaneo, en vez de crear una imagen nueva cada vez
 
   const [modo, setModo] = useState<Modo>('espera');
   const [resultado, setResultado] = useState<Resultado>({ tipo: null });
@@ -28,6 +29,29 @@ export default function PantallaPage() {
   const [hora, setHora] = useState('');
   const [escaneando, setEscaneando] = useState(false);
   const [ultimosAccesos, setUltimosAccesos] = useState<any[]>([]);
+
+  // Refresco automático cada 6 horas cuando la pantalla está inactiva
+  // (sin resultado en pantalla ni un escaneo en curso). Esto es lo que hacen
+  // los kioscos/pantallas de acceso 24/7 en la práctica: por más optimizado
+  // que esté el código, un navegador con cámara + WebGL activos durante
+  // horas se va poniendo lento (memoria, buffers de video, etc.) — refrescar
+  // solos de vez en cuando resuelve eso de raíz sin cortar a nadie a mitad
+  // de un ingreso.
+  const HORAS_ENTRE_REFRESCOS = 6;
+  const inicioRef = useRef(Date.now());
+  const estadoActualRef = useRef({ resultadoTipo: resultado.tipo, escaneando, cargando });
+  estadoActualRef.current = { resultadoTipo: resultado.tipo, escaneando, cargando };
+
+  useEffect(() => {
+    const chequeo = setInterval(() => {
+      const horasActivo = (Date.now() - inicioRef.current) / (1000 * 60 * 60);
+      const { resultadoTipo, escaneando: enEscaneo, cargando: enCarga } = estadoActualRef.current;
+      if (horasActivo >= HORAS_ENTRE_REFRESCOS && !resultadoTipo && !enEscaneo && !enCarga) {
+        window.location.reload();
+      }
+    }, 60000); // revisa cada minuto si ya toca y si es un buen momento para no interrumpir a nadie
+    return () => clearInterval(chequeo);
+  }, []);
 
   // Reloj
   useEffect(() => {
@@ -127,12 +151,27 @@ export default function PantallaPage() {
     if (!faceApiReady) await cargarFaceApi();
   }, [iniciarCamara, cargarFaceApi, faceApiReady]);
 
-  // Escanear frame y buscar rostro
+  // Escanear frame y buscar rostro.
+  // IMPORTANTE: escaneandoRef/pausadoHastaRef son refs (no estado) a propósito.
+  // Antes, el "pausar 15s tras un reconocimiento" se hacía cancelando y
+  // recreando el setInterval — pero como escanearFrame dependía de `escaneando`
+  // (estado), cada vez que terminaba un escaneo se generaba una NUEVA versión
+  // de la función, lo que disparaba el useEffect de más abajo y creaba OTRO
+  // intervalo en paralelo sin cancelar el anterior. Con cada persona
+  // reconocida quedaba un intervalo "huérfano" corriendo para siempre — por
+  // eso se iba pegando cada vez más rápido con cada ingreso. Usando refs para
+  // el control interno, escanearFrame ya no cambia de referencia y el
+  // intervalo se crea una sola vez.
+  const escaneandoRef = useRef(false);
+  const pausadoHastaRef = useRef(0);
+
   const escanearFrame = useCallback(async () => {
-    if (!videoRef.current || !canvasRef.current || escaneando) return;
+    if (!videoRef.current || !canvasRef.current) return;
+    if (escaneandoRef.current || Date.now() < pausadoHastaRef.current) return;
     // @ts-ignore
     if (!window.faceapi || !faceApiReady) return;
 
+    escaneandoRef.current = true;
     setEscaneando(true);
     try {
       const ctx = canvasRef.current.getContext('2d')!;
@@ -142,9 +181,9 @@ export default function PantallaPage() {
       ctx.drawImage(videoRef.current, 0, 0);
 
       const imgData = canvasRef.current.toDataURL('image/jpeg', 0.7);
-      const img = new Image();
-      img.src = imgData;
-      await new Promise(r => { img.onload = r; });
+      if (!imgRef.current) imgRef.current = new Image();
+      const img = imgRef.current;
+      await new Promise<void>(resolve => { img.onload = () => resolve(); img.src = imgData; });
 
       // @ts-ignore
       const opciones = new window.faceapi.TinyFaceDetectorOptions({ inputSize: 416, scoreThreshold: 0.5 });
@@ -157,12 +196,7 @@ export default function PantallaPage() {
       // Si la cara está muy chica (persona lejos de la cámara), el descriptor
       // sale de mala calidad — se ignora en silencio y se sigue escaneando,
       // en vez de mandar un descriptor poco confiable al servidor.
-      if (detection && detection.detection.box.width < anchoVideo * 0.16) {
-        setEscaneando(false);
-        return;
-      }
-
-      if (detection) {
+      if (detection && detection.detection.box.width >= anchoVideo * 0.16) {
         const descriptor = Array.from(detection.descriptor);
         const res = await fetch('/api/asistencia/facial', {
           method: 'POST',
@@ -170,7 +204,7 @@ export default function PantallaPage() {
           body: JSON.stringify({ descriptor }),
         });
         const data = await res.json();
-        
+
         if (data.encontrado) {
           setResultado({
             tipo: data.duplicado ? 'duplicado' : data.planVigente ? 'bienvenido' : 'vencido',
@@ -179,19 +213,19 @@ export default function PantallaPage() {
             planVigente: data.planVigente,
           });
           if (!data.duplicado) cargarAccesos();
-          if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
-          setTimeout(() => {
-            if (modo === 'facial' && streamRef.current) {
-              intervalRef.current = setInterval(escanearFrame, 1500);
-            }
-          }, 15000);
+          // Pausa simple sin tocar el intervalo: los próximos ticks se
+          // ignoran solos hasta que pase el tiempo, sin crear intervalos nuevos.
+          pausadoHastaRef.current = Date.now() + 15000;
         }
       }
     } catch {}
+    escaneandoRef.current = false;
     setEscaneando(false);
-  }, [faceApiReady, escaneando, modo, cargarAccesos]);
+  }, [faceApiReady, cargarAccesos]);
 
-  // Escaneo continuo — cada 1.5s, mucho más ágil que antes gracias al detector liviano
+  // Escaneo continuo — cada 1.5s, mucho más ágil que antes gracias al detector liviano.
+  // Este efecto ahora solo depende de modo/faceApiReady (no de escanearFrame
+  // cambiando en cada ciclo), así que el intervalo se crea una única vez.
   useEffect(() => {
     if (modo === 'facial' && faceApiReady) {
       intervalRef.current = setInterval(escanearFrame, 1500);
