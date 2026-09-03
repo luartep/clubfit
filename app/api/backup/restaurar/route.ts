@@ -40,6 +40,11 @@ async function ensureTables() {
 // asistencias que ya existan (mismo id) no se duplican. Al final, reordena
 // las secuencias de autonumeración para que los próximos registros nuevos
 // no choquen con los ids restaurados.
+//
+// Cada fila se inserta en su propio try/catch: si UNA fila falla (ej. un
+// RUT que ya está usado por otro id), el resto de la restauración sigue
+// igual — antes, un solo error cortaba todo el proceso a mitad de camino
+// sin terminar de restaurar lo que sí era válido, y sin avisar qué falló.
 export async function POST(req: NextRequest) {
   try {
     await ensureTables();
@@ -50,41 +55,54 @@ export async function POST(req: NextRequest) {
     }
 
     let usuariosRestaurados = 0;
+    const usuariosConError: string[] = [];
     for (const u of backup.usuarios) {
-      if (!u.id || !u.nombre || !u.rut || !u.plan_tipo || !u.plan_inicio || !u.plan_vencimiento) continue;
-      await sql`
-        INSERT INTO usuarios (
-          id, nombre, rut, email, telefono, foto, foto_descriptor,
-          plan_tipo, plan_inicio, plan_vencimiento, activo, huella_id, huella_credencial,
-          created_at, updated_at
-        ) VALUES (
-          ${u.id}, ${u.nombre}, ${u.rut}, ${u.email || null}, ${u.telefono || null},
-          ${u.foto || null}, ${u.foto_descriptor || null}, ${u.plan_tipo},
-          ${u.plan_inicio}, ${u.plan_vencimiento}, ${u.activo ?? true},
-          ${u.huella_id || null}, ${u.huella_credencial || null},
-          ${u.created_at || new Date().toISOString()}, ${u.updated_at || new Date().toISOString()}
-        )
-        ON CONFLICT (id) DO UPDATE SET
-          nombre = EXCLUDED.nombre, rut = EXCLUDED.rut, email = EXCLUDED.email,
-          telefono = EXCLUDED.telefono, foto = EXCLUDED.foto, foto_descriptor = EXCLUDED.foto_descriptor,
-          plan_tipo = EXCLUDED.plan_tipo, plan_inicio = EXCLUDED.plan_inicio,
-          plan_vencimiento = EXCLUDED.plan_vencimiento, activo = EXCLUDED.activo,
-          huella_id = EXCLUDED.huella_id, huella_credencial = EXCLUDED.huella_credencial,
-          updated_at = NOW()
-      `;
-      usuariosRestaurados++;
+      if (!u.id || !u.nombre || !u.rut || !u.plan_tipo || !u.plan_inicio || !u.plan_vencimiento) {
+        usuariosConError.push(`id ${u.id ?? '?'} (faltan campos obligatorios)`);
+        continue;
+      }
+      try {
+        await sql`
+          INSERT INTO usuarios (
+            id, nombre, rut, email, telefono, foto, foto_descriptor,
+            plan_tipo, plan_inicio, plan_vencimiento, activo, huella_id, huella_credencial,
+            created_at, updated_at
+          ) VALUES (
+            ${u.id}, ${u.nombre}, ${u.rut}, ${u.email || null}, ${u.telefono || null},
+            ${u.foto || null}, ${u.foto_descriptor || null}, ${u.plan_tipo},
+            ${u.plan_inicio}, ${u.plan_vencimiento}, ${u.activo ?? true},
+            ${u.huella_id || null}, ${u.huella_credencial || null},
+            ${u.created_at || new Date().toISOString()}, ${u.updated_at || new Date().toISOString()}
+          )
+          ON CONFLICT (id) DO UPDATE SET
+            nombre = EXCLUDED.nombre, rut = EXCLUDED.rut, email = EXCLUDED.email,
+            telefono = EXCLUDED.telefono, foto = EXCLUDED.foto, foto_descriptor = EXCLUDED.foto_descriptor,
+            plan_tipo = EXCLUDED.plan_tipo, plan_inicio = EXCLUDED.plan_inicio,
+            plan_vencimiento = EXCLUDED.plan_vencimiento, activo = EXCLUDED.activo,
+            huella_id = EXCLUDED.huella_id, huella_credencial = EXCLUDED.huella_credencial,
+            updated_at = NOW()
+        `;
+        usuariosRestaurados++;
+      } catch (e: any) {
+        usuariosConError.push(`${u.nombre || 'sin nombre'} / ${u.rut || 'sin rut'} (${e.message?.includes('unique') ? 'RUT duplicado' : 'error'})`);
+      }
     }
 
     let asistenciasRestauradas = 0;
+    let asistenciasConError = 0;
     for (const a of backup.asistencias) {
-      if (!a.id || !a.usuario_id || !a.metodo) continue;
-      const res = await sql`
-        INSERT INTO asistencias (id, usuario_id, metodo, timestamp, exitoso)
-        VALUES (${a.id}, ${a.usuario_id}, ${a.metodo}, ${a.timestamp || new Date().toISOString()}, ${a.exitoso ?? true})
-        ON CONFLICT (id) DO NOTHING
-        RETURNING id
-      `;
-      if (res.length) asistenciasRestauradas++;
+      if (!a.id || !a.usuario_id || !a.metodo) { asistenciasConError++; continue; }
+      try {
+        const res = await sql`
+          INSERT INTO asistencias (id, usuario_id, metodo, timestamp, exitoso)
+          VALUES (${a.id}, ${a.usuario_id}, ${a.metodo}, ${a.timestamp || new Date().toISOString()}, ${a.exitoso ?? true})
+          ON CONFLICT (id) DO NOTHING
+          RETURNING id
+        `;
+        if (res.length) asistenciasRestauradas++;
+      } catch {
+        asistenciasConError++;
+      }
     }
 
     // Reordenar las secuencias para que el próximo usuario/asistencia nuevo
@@ -98,6 +116,8 @@ export async function POST(req: NextRequest) {
       asistenciasRestauradas,
       totalUsuariosEnArchivo: backup.usuarios.length,
       totalAsistenciasEnArchivo: backup.asistencias.length,
+      usuariosConError: usuariosConError.length ? usuariosConError : undefined,
+      asistenciasConError: asistenciasConError || undefined,
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });

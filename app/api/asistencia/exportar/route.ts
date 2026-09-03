@@ -2,6 +2,7 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { neon } from '@neondatabase/serverless';
 import * as XLSX from 'xlsx';
+import { hoyISO } from '@/lib/utils';
 
 const sql = neon(process.env.POSTGRES_URL ?? process.env.DATABASE_URL!);
 
@@ -14,7 +15,10 @@ export async function GET() {
     `;
 
     const filas = asistencias.map((a: any) => ({
-      'Fecha y Hora': new Date(a.timestamp).toLocaleString('es-CL'),
+      // Se fija timeZone explícito: el servidor corre en UTC, así que sin esto
+      // las horas de ingreso saldrían todas corridas (ej. una entrada a las
+      // 9:00 am en Chile aparecería como "13:00" en el Excel).
+      'Fecha y Hora': new Date(a.timestamp).toLocaleString('es-CL', { timeZone: 'America/Santiago' }),
       'Nombre': a.nombre,
       'RUT': a.rut,
       'Método': a.metodo === 'facial' ? 'Facial' : a.metodo === 'huella' ? 'Huella' : 'Manual',
@@ -34,12 +38,11 @@ export async function GET() {
     XLSX.utils.book_append_sheet(libro, hoja, 'Asistencias');
     const buffer = XLSX.write(libro, { type: 'buffer', bookType: 'xlsx' });
 
-    const fecha = new Date().toISOString().split('T')[0];
     return new NextResponse(buffer, {
       status: 200,
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': `attachment; filename="asistencias-clubfit-${fecha}.xlsx"`,
+        'Content-Disposition': `attachment; filename="asistencias-clubfit-${hoyISO()}.xlsx"`,
       },
     });
   } catch (e: any) {

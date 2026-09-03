@@ -9,12 +9,17 @@ interface Props {
 export default function CamaraCaptura({ onCaptura, onCerrar }: Props) {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [stream, setStream] = useState<MediaStream | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
   const [capturada, setCapturada] = useState<string | null>(null);
   const [cargandoIA, setCargandoIA] = useState(false);
   const [faceApi, setFaceApi] = useState<any>(null);
   const [modelsLoaded, setModelsLoaded] = useState(false);
   const [error, setError] = useState('');
+  const [muestra, setMuestra] = useState(0); // progreso 0-3 mientras captura las 3 muestras
+  // Si se cierra el modal (Cancelar / ✕) mientras las 3 muestras se siguen
+  // analizando en segundo plano, esta ref evita que el resultado se aplique
+  // igual al formulario del padre después de cancelar.
+  const canceladoRef = useRef(false);
 
   // Cargar face-api.js desde CDN
   useEffect(() => {
@@ -57,19 +62,27 @@ export default function CamaraCaptura({ onCaptura, onCerrar }: Props) {
       const s = await navigator.mediaDevices.getUserMedia({
         video: { width: 640, height: 480, facingMode: 'user' }
       });
-      setStream(s);
+      streamRef.current = s;
       if (videoRef.current) videoRef.current.srcObject = s;
     } catch {
       setError('No se pudo acceder a la cámara. Verifica los permisos.');
     }
   }, []);
 
+  // Bug corregido: antes esta limpieza capturaba el `stream` (estado) del
+  // momento en que se creó el efecto — que siempre era `null`, porque
+  // `iniciarCamara` es asíncrona y el estado se actualiza después. Como
+  // resultado, la cámara NUNCA se apagaba al cerrar este modal (quedaba
+  // prendida en segundo plano cada vez que se registraba o editaba una
+  // foto). Usando una ref, la limpieza siempre ve el stream real y actual.
   useEffect(() => {
     iniciarCamara();
-    return () => { stream?.getTracks().forEach(t => t.stop()); };
-  }, []);
-
-  const [muestra, setMuestra] = useState(0); // progreso 0-3 mientras captura las 3 muestras
+    return () => {
+      canceladoRef.current = true;
+      streamRef.current?.getTracks().forEach(t => t.stop());
+      streamRef.current = null;
+    };
+  }, [iniciarCamara]);
 
   const detectarDescriptor = useCallback(async (dataUrl: string) => {
     const img = new Image();
@@ -93,7 +106,7 @@ export default function CamaraCaptura({ onCaptura, onCerrar }: Props) {
     setCapturada(foto);
 
     if (!faceApi || !modelsLoaded) {
-      onCaptura(foto, null);
+      if (!canceladoRef.current) onCaptura(foto, null);
       return;
     }
 
@@ -120,7 +133,7 @@ export default function CamaraCaptura({ onCaptura, onCerrar }: Props) {
     }
 
     if (descriptores.length === 0) {
-      onCaptura(foto, null);
+      if (!canceladoRef.current) onCaptura(foto, null);
       return;
     }
 
@@ -130,7 +143,7 @@ export default function CamaraCaptura({ onCaptura, onCerrar }: Props) {
     for (const d of descriptores) {
       for (let i = 0; i < largo; i++) promedio[i] += d[i] / descriptores.length;
     }
-    onCaptura(foto, promedio);
+    if (!canceladoRef.current) onCaptura(foto, promedio);
   }, [faceApi, modelsLoaded, onCaptura, detectarDescriptor]);
 
   return (

@@ -62,6 +62,12 @@ export function proxy(req: NextRequest) {
     }
     return NextResponse.next();
   }
+  if (pathname === '/api/asistencia/resumen') {
+    if (!estaAutenticado(req)) {
+      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+    }
+    return NextResponse.next();
+  }
 
   // Backup y restauración: solo admin
   if (pathname.startsWith('/api/backup/')) {
@@ -81,6 +87,7 @@ export const config = {
     '/api/usuarios/:path*',
     '/api/asistencia',
     '/api/asistencia/exportar',
+    '/api/asistencia/resumen',
     '/api/backup/:path*',
   ],
 };

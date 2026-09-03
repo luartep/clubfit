@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { neon } from '@neondatabase/serverless';
+import { diasParaVencer } from '@/lib/utils';
 
 const sql = neon(process.env.POSTGRES_URL ?? process.env.DATABASE_URL!);
 
@@ -51,9 +52,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ encontrado: false, mensaje: 'Rostro no reconocido' });
     }
 
-    const hoy = new Date();
-    const vencimiento = new Date(mejorMatch.plan_vencimiento);
-    const planVigente = vencimiento >= hoy;
+    // Antes: `new Date(mejorMatch.plan_vencimiento) >= new Date()` — comparaba
+    // una fecha DATE (medianoche UTC) contra el instante actual, lo que
+    // rechazaba a alguien como "vencido" desde medianoche UTC de su día de
+    // término (varias horas antes de medianoche real en Chile). Ahora se
+    // compara por día calendario local: el plan sigue vigente durante TODO
+    // el día en que vence.
+    const planVigente = diasParaVencer(mejorMatch.plan_vencimiento) >= 0;
 
     // Chequeo de duplicado reciente
     const ultimas = await sql`

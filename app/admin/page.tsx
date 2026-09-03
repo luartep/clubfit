@@ -16,9 +16,10 @@ export default function AdminPage() {
   const [asistenciasHoy, setAsistenciasHoy] = useState<any[]>([]);
   const [tab, setTab] = useState<'usuarios' | 'asistencias' | 'backup'>('usuarios');
   const [filtroEstado, setFiltroEstado] = useState<'todos' | 'activo' | 'proximo' | 'vencido'>('todos');
+  const [orden, setOrden] = useState<{ campo: 'nombre' | 'vencimiento'; dir: 'asc' | 'desc' }>({ campo: 'nombre', dir: 'asc' });
 
   const cargarUsuarios = useCallback(async () => {
-    const res = await fetch(`/api/usuarios${busqueda ? `?buscar=${busqueda}` : ''}`);
+    const res = await fetch(`/api/usuarios${busqueda ? `?buscar=${encodeURIComponent(busqueda)}` : ''}`);
     const data = await res.json();
     setUsuarios(Array.isArray(data) ? data : []);
     setCargando(false);
@@ -38,8 +39,17 @@ export default function AdminPage() {
     setAsistenciasHoy(Array.isArray(data) ? data : []);
   }, []);
 
+  // Últimos 7 días de asistencias, para el mini-gráfico del panel
+  const [resumenSemanal, setResumenSemanal] = useState<{ dia: string; total: number }[]>([]);
+  const cargarResumenSemanal = useCallback(async () => {
+    const res = await fetch('/api/asistencia/resumen');
+    const data = await res.json();
+    setResumenSemanal(Array.isArray(data) ? data : []);
+  }, []);
+
   useEffect(() => { cargarUsuarios(); }, [cargarUsuarios]);
   useEffect(() => { cargarAsistenciasHoy(); }, [cargarAsistenciasHoy]);
+  useEffect(() => { cargarResumenSemanal(); }, [cargarResumenSemanal]);
   useEffect(() => { if (tab === 'asistencias') cargarAsistencias(); }, [tab, cargarAsistencias]);
 
   // Actualización en vivo: refresca usuarios y asistencias cada pocos segundos
@@ -48,23 +58,26 @@ export default function AdminPage() {
     const id = setInterval(() => {
       cargarUsuarios();
       cargarAsistenciasHoy();
+      cargarResumenSemanal();
       if (tab === 'asistencias') cargarAsistencias();
     }, 8000);
     return () => clearInterval(id);
-  }, [cargarUsuarios, cargarAsistenciasHoy, cargarAsistencias, tab]);
+  }, [cargarUsuarios, cargarAsistenciasHoy, cargarResumenSemanal, cargarAsistencias, tab]);
 
   const eliminar = async (id: number) => {
     if (!confirm('¿Eliminar este usuario?')) return;
-    await fetch(`/api/usuarios/${id}`, { method: 'DELETE' });
+    const res = await fetch(`/api/usuarios/${id}`, { method: 'DELETE' });
+    if (!res.ok) { alert('No se pudo eliminar el usuario. Intenta de nuevo.'); return; }
     cargarUsuarios();
   };
 
   const toggleActivo = async (usuario: any) => {
-    await fetch(`/api/usuarios/${usuario.id}`, {
+    const res = await fetch(`/api/usuarios/${usuario.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ activo: !usuario.activo }),
     });
+    if (!res.ok) { alert('No se pudo actualizar el usuario. Intenta de nuevo.'); return; }
     cargarUsuarios();
   };
 
@@ -103,9 +116,12 @@ export default function AdminPage() {
       });
       const data = await res.json();
       if (res.ok) {
+        const advertencia = data.usuariosConError?.length
+          ? ` (⚠️ ${data.usuariosConError.length} usuario(s) no se pudieron restaurar: ${data.usuariosConError.slice(0, 3).join(', ')}${data.usuariosConError.length > 3 ? '…' : ''})`
+          : '';
         setResultadoRestore({
           ok: true,
-          mensaje: `Listo: ${data.usuariosRestaurados}/${data.totalUsuariosEnArchivo} usuarios y ${data.asistenciasRestauradas}/${data.totalAsistenciasEnArchivo} asistencias restauradas.`,
+          mensaje: `Listo: ${data.usuariosRestaurados}/${data.totalUsuariosEnArchivo} usuarios y ${data.asistenciasRestauradas}/${data.totalAsistenciasEnArchivo} asistencias restauradas.${advertencia}`,
         });
         cargarUsuarios();
         cargarAsistenciasHoy();
@@ -126,11 +142,12 @@ export default function AdminPage() {
     );
     if (!confirmacion) return;
 
-    await fetch(`/api/usuarios/${usuario.id}`, {
+    const res = await fetch(`/api/usuarios/${usuario.id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ planInicio: nuevoInicio, planVencimiento: nuevoVencimiento }),
     });
+    if (!res.ok) { alert('No se pudo renovar el plan. Intenta de nuevo.'); return; }
     cargarUsuarios();
   };
 
@@ -155,9 +172,32 @@ export default function AdminPage() {
   const vencidos = usuarios.filter(u => estadoPlan(u.plan_vencimiento) === 'vencido').length;
   const hoyAsistencias = asistenciasHoy.length;
 
-  const usuariosMostrados = filtroEstado === 'todos'
+  const usuariosMostrados = (filtroEstado === 'todos'
     ? usuarios
-    : usuarios.filter(u => estadoPlan(u.plan_vencimiento) === filtroEstado);
+    : usuarios.filter(u => estadoPlan(u.plan_vencimiento) === filtroEstado)
+  ).slice().sort((a, b) => {
+    const factor = orden.dir === 'asc' ? 1 : -1;
+    if (orden.campo === 'nombre') return a.nombre.localeCompare(b.nombre) * factor;
+    return (new Date(a.plan_vencimiento).getTime() - new Date(b.plan_vencimiento).getTime()) * factor;
+  });
+
+  const cambiarOrden = (campo: 'nombre' | 'vencimiento') => {
+    setOrden(o => o.campo === campo ? { campo, dir: o.dir === 'asc' ? 'desc' : 'asc' } : { campo, dir: 'asc' });
+  };
+
+  // Arma los últimos 7 días (hoy incluido) con su conteo de asistencias,
+  // rellenando con 0 los días sin registros — el backend solo devuelve
+  // los días que tuvieron al menos una asistencia.
+  const DIAS_SEMANA = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+  const ultimos7Dias: { fecha: string; etiqueta: string; total: number }[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date();
+    d.setDate(d.getDate() - i);
+    const fecha = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const encontrado = resumenSemanal.find(r => String(r.dia).split('T')[0] === fecha);
+    ultimos7Dias.push({ fecha, etiqueta: DIAS_SEMANA[d.getDay()], total: encontrado?.total || 0 });
+  }
+  const maxAsistenciasSemana = Math.max(1, ...ultimos7Dias.map(d => d.total));
 
 
   return (
@@ -210,6 +250,31 @@ export default function AdminPage() {
               <div style={{ color: '#888', fontSize: '0.85rem', marginTop: '0.3rem' }}>{s.label}</div>
             </div>
           ))}
+        </div>
+
+        {/* Gráfico de asistencias — últimos 7 días */}
+        <div style={{
+          background: '#141414', border: '1px solid #1e1e1e', borderRadius: '12px',
+          padding: '1.5rem', marginBottom: '2rem',
+        }}>
+          <h3 style={{ color: '#888', fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: '1.2rem' }}>
+            📊 Asistencias — Últimos 7 días
+          </h3>
+          <div style={{ display: 'flex', alignItems: 'flex-end', gap: '0.75rem', height: '120px' }}>
+            {ultimos7Dias.map(d => (
+              <div key={d.fecha} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', height: '100%', justifyContent: 'flex-end' }}>
+                <span style={{ color: '#888', fontSize: '0.75rem', marginBottom: '0.3rem' }}>{d.total || ''}</span>
+                <div style={{
+                  width: '100%', maxWidth: '32px',
+                  height: `${Math.max(4, (d.total / maxAsistenciasSemana) * 85)}px`,
+                  background: d.total === 0 ? '#2a2a2a' : '#e50914',
+                  borderRadius: '4px 4px 0 0',
+                  transition: 'height 0.3s ease',
+                }} />
+                <span style={{ color: '#666', fontSize: '0.75rem', marginTop: '0.5rem' }}>{d.etiqueta}</span>
+              </div>
+            ))}
+          </div>
         </div>
 
         {/* Tabs */}
@@ -300,12 +365,20 @@ export default function AdminPage() {
                 <table style={{ width: '100%', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ borderBottom: '1px solid #1e1e1e' }}>
-                      {['Foto', 'Nombre', 'RUT', 'Plan', 'Vencimiento', 'Estado', 'Acciones'].map(h => (
-                        <th key={h} style={{
-                          padding: '1rem', textAlign: 'left', color: '#888',
-                          fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px',
-                        }}>{h}</th>
-                      ))}
+                      {['Foto', 'Nombre', 'RUT', 'Plan', 'Vencimiento', 'Estado', 'Acciones'].map(h => {
+                        const campoOrden = h === 'Nombre' ? 'nombre' : h === 'Vencimiento' ? 'vencimiento' : null;
+                        const esOrdenable = campoOrden !== null;
+                        const activa = campoOrden === orden.campo;
+                        return (
+                          <th key={h} onClick={() => esOrdenable && cambiarOrden(campoOrden as 'nombre' | 'vencimiento')} style={{
+                            padding: '1rem', textAlign: 'left', color: activa ? '#e50914' : '#888',
+                            fontSize: '0.8rem', textTransform: 'uppercase', letterSpacing: '0.5px',
+                            cursor: esOrdenable ? 'pointer' : 'default', userSelect: 'none', whiteSpace: 'nowrap',
+                          }}>
+                            {h}{activa ? (orden.dir === 'asc' ? ' ▲' : ' ▼') : ''}
+                          </th>
+                        );
+                      })}
                     </tr>
                   </thead>
                   <tbody>

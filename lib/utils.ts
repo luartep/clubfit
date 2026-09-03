@@ -1,3 +1,32 @@
+// Convierte una fecha "de solo día" (ej. una columna DATE de la base de
+// datos, o el string ISO que llega desde la API) a un Date en medianoche
+// LOCAL, en vez de medianoche UTC. Esto es importante: un valor como
+// "2026-08-31" (sin hora) se interpreta por spec como UTC, así que en
+// Chile (UTC-3/UTC-4) `new Date("2026-08-31")` cae en 30-08-2026 20:00
+// hora local — un día ANTES de lo que el admin realmente eligió. Todas las
+// comparaciones de "cuántos días faltan" o "el plan sigue vigente" deben
+// pasar por acá para no restar un día de más.
+export function soloFechaLocal(valor: string | Date): Date {
+  const iso = typeof valor === 'string' ? valor : valor.toISOString();
+  const soloFecha = iso.split('T')[0]; // 'YYYY-MM-DD'
+  return new Date(soloFecha + 'T00:00:00');
+}
+
+// El gimnasio opera en Chile, pero el servidor (Vercel) corre en UTC por
+// defecto — no en horario de Chile. Eso significa que, aproximadamente
+// entre las 20-21h y la medianoche (hora de Chile), el servidor ya
+// considera que es "mañana" mientras en Chile todavía es "hoy". Para que
+// el cálculo de días/vigencia sea correcto sin importar en qué zona
+// horaria esté el servidor, se obtiene la fecha calendario real de Chile
+// con una zona horaria explícita (Intl), en vez de depender de la zona
+// horaria "ambiente" del proceso.
+const ZONA_HORARIA_APP = 'America/Santiago';
+
+function hoyEnZonaApp(): Date {
+  const ymd = new Intl.DateTimeFormat('en-CA', { timeZone: ZONA_HORARIA_APP }).format(new Date());
+  return new Date(ymd + 'T00:00:00');
+}
+
 // Validar y formatear RUT chileno
 export function validarRut(rut: string): boolean {
   const rutLimpio = rut.replace(/[^0-9kK]/g, '');
@@ -60,8 +89,8 @@ export function planLabel(tipo: string): string {
 }
 
 export function estadoPlan(vencimiento: string | Date): 'activo' | 'proximo' | 'vencido' {
-  const hoy = new Date();
-  const v = new Date(vencimiento);
+  const hoy = hoyEnZonaApp();
+  const v = soloFechaLocal(vencimiento);
   const diff = (v.getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24);
   if (diff < 0) return 'vencido';
   if (diff <= 7) return 'proximo';
@@ -69,17 +98,15 @@ export function estadoPlan(vencimiento: string | Date): 'activo' | 'proximo' | '
 }
 
 export function formatDate(date: string | Date): string {
-  return new Date(date).toLocaleDateString('es-CL', {
+  return soloFechaLocal(date).toLocaleDateString('es-CL', {
     day: '2-digit', month: '2-digit', year: 'numeric'
   });
 }
 
 // Días restantes hasta el vencimiento (negativo si ya venció)
 export function diasParaVencer(vencimiento: string | Date): number {
-  const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
-  const v = new Date(vencimiento);
-  v.setHours(0, 0, 0, 0);
+  const hoy = hoyEnZonaApp();
+  const v = soloFechaLocal(vencimiento);
   return Math.round((v.getTime() - hoy.getTime()) / (1000 * 60 * 60 * 24));
 }
 
@@ -98,14 +125,18 @@ export function mensajeVencimiento(vencimiento: string | Date): string {
 // Suma la cantidad de meses (o años, para 'anual') del plan a una fecha de inicio,
 // devuelve el string YYYY-MM-DD listo para un <input type="date">
 export function calcularVencimientoISO(inicio: string, planTipo: string): string {
-  const fecha = inicio ? new Date(inicio + 'T00:00:00') : new Date();
+  const fecha = new Date((inicio || hoyISO()) + 'T00:00:00');
   const vencimiento = calcularVencimiento(fecha, planTipo);
   return vencimiento.toISOString().split('T')[0];
 }
 
-// Fecha de hoy en formato YYYY-MM-DD, para valores por defecto de <input type="date">
+// Fecha de hoy en formato YYYY-MM-DD (según el calendario de Chile), para
+// valores por defecto de <input type="date"> y para calcular renovaciones.
+// OJO: no usar new Date().toISOString().split('T')[0] ni
+// getFullYear()/getDate() a secas para esto — ambos dependen de la zona
+// horaria del proceso, que en el servidor (Vercel) es UTC y no Chile.
 export function hoyISO(): string {
-  return new Date().toISOString().split('T')[0];
+  return new Intl.DateTimeFormat('en-CA', { timeZone: ZONA_HORARIA_APP }).format(new Date());
 }
 
 // Calcula la nueva fecha de vencimiento al renovar un plan.
@@ -116,11 +147,10 @@ export function calcularRenovacion(vencimientoActual: string | Date, planTipo: s
   nuevoVencimiento: string;
 } {
   const hoy = hoyISO();
-  const vencidoActual = new Date(vencimientoActual);
-  const baseEsHoy = vencidoActual < new Date();
-  const base = baseEsHoy ? hoy : new Date(vencimientoActual).toISOString().split('T')[0];
+  const yaVencio = diasParaVencer(vencimientoActual) < 0;
+  const base = yaVencio ? hoy : soloFechaLocal(vencimientoActual).toISOString().split('T')[0];
   return {
-    nuevoInicio: baseEsHoy ? hoy : base,
+    nuevoInicio: yaVencio ? hoy : base,
     nuevoVencimiento: calcularVencimientoISO(base, planTipo),
   };
 }

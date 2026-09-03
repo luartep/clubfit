@@ -59,8 +59,13 @@ export async function POST(req: NextRequest) {
       return res;
     }
 
-    // Login incorrecto: sumar el intento y bloquear si se pasa del máximo
-    const intentosNuevos = (registro?.intentos || 0) + 1;
+    // Login incorrecto: sumar el intento y bloquear si se pasa del máximo.
+    // Si el bloqueo anterior ya venció, se parte de cero en vez de arrastrar
+    // el contador viejo — si no, un solo error justo después de esperar los
+    // 15 minutos volvía a bloquear al instante otros 15 minutos más.
+    const bloqueoYaExpiro = registro?.bloqueado_hasta && new Date(registro.bloqueado_hasta) <= new Date();
+    const intentosPrevios = bloqueoYaExpiro ? 0 : (registro?.intentos || 0);
+    const intentosNuevos = intentosPrevios + 1;
     const bloquear = intentosNuevos >= MAX_INTENTOS;
     const bloqueadoHasta = bloquear ? new Date(Date.now() + BLOQUEO_MINUTOS * 60000).toISOString() : null;
     await sql`

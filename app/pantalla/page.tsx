@@ -1,7 +1,7 @@
 'use client';
 import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import { formatearRut, validarRut, estadoPlan, planLabel, formatDate, diasParaVencer } from '@/lib/utils';
+import { formatearRut, validarRut, planLabel, formatDate, diasParaVencer } from '@/lib/utils';
 
 type Modo = 'espera' | 'facial' | 'manual';
 type ResultadoTipo = 'bienvenido' | 'vencido' | 'duplicado' | 'no_encontrado' | 'error' | null;
@@ -19,6 +19,7 @@ export default function PantallaPage() {
   const streamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<any>(null);
   const imgRef = useRef<HTMLImageElement | null>(null); // se reutiliza en cada escaneo, en vez de crear una imagen nueva cada vez
+  const rutInputRef = useRef<HTMLInputElement>(null); // se mantiene con foco para escribir o usar un lector de código de barras sin hacer clic primero
 
   const [modo, setModo] = useState<Modo>('espera');
   const [resultado, setResultado] = useState<Resultado>({ tipo: null });
@@ -81,6 +82,20 @@ export default function PantallaPage() {
 
   useEffect(() => { cargarAccesos(); }, [cargarAccesos]);
 
+  // Mantiene el foco en el campo de RUT para que el personal (o un lector de
+  // código de barras/RUT) pueda escribir y presionar Enter sin hacer clic
+  // primero. Se reaplica solo si el usuario no está usando otro campo (ej.
+  // buscando algo distinto), para no robarle el foco a otra interacción.
+  useEffect(() => {
+    const reenfocar = () => {
+      const activo = document.activeElement;
+      if (!activo || activo === document.body) rutInputRef.current?.focus();
+    };
+    reenfocar();
+    const id = setInterval(reenfocar, 2000);
+    return () => clearInterval(id);
+  }, []);
+
   // Actualización en vivo del listado lateral, por si el ingreso se registra
   // desde otro dispositivo (otra pantalla de acceso o el panel admin).
   useEffect(() => {
@@ -141,6 +156,43 @@ export default function PantallaPage() {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
     streamRef.current?.getTracks().forEach(t => t.stop());
     streamRef.current = null;
+  }, []);
+
+  // Sonido de confirmación con Web Audio API (sin archivos externos) —
+  // le da al kiosco una señal auditiva clara de si el ingreso fue exitoso,
+  // requiere atención (plan vencido / ya registrado) o fue rechazado.
+  const reproducirTono = (ctx: AudioContext, frecuencia: number, duracionMs: number, retrasoMs = 0) => {
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.value = frecuencia;
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    const inicio = ctx.currentTime + retrasoMs / 1000;
+    const fin = inicio + duracionMs / 1000;
+    gain.gain.setValueAtTime(0, inicio);
+    gain.gain.linearRampToValueAtTime(0.25, inicio + 0.01);
+    gain.gain.linearRampToValueAtTime(0, fin);
+    osc.start(inicio);
+    osc.stop(fin + 0.02);
+  };
+
+  const reproducirSonido = useCallback((tipo: 'exito' | 'aviso' | 'error') => {
+    try {
+      // @ts-ignore — Safari expone AudioContext como webkitAudioContext
+      const AudioContextClase = window.AudioContext || window.webkitAudioContext;
+      const ctx: AudioContext = new AudioContextClase();
+      if (tipo === 'exito') {
+        reproducirTono(ctx, 880, 120, 0);
+        reproducirTono(ctx, 1175, 160, 130);
+      } else if (tipo === 'aviso') {
+        reproducirTono(ctx, 520, 220, 0);
+      } else {
+        reproducirTono(ctx, 260, 150, 0);
+        reproducirTono(ctx, 220, 200, 160);
+      }
+      setTimeout(() => ctx.close(), 700);
+    } catch {}
   }, []);
 
   // Activar modo facial
@@ -212,7 +264,10 @@ export default function PantallaPage() {
             mensaje: data.mensaje,
             planVigente: data.planVigente,
           });
-          if (!data.duplicado) cargarAccesos();
+          if (!data.duplicado) {
+            cargarAccesos();
+            reproducirSonido(data.planVigente ? 'exito' : 'aviso');
+          }
           // Pausa simple sin tocar el intervalo: los próximos ticks se
           // ignoran solos hasta que pase el tiempo, sin crear intervalos nuevos.
           pausadoHastaRef.current = Date.now() + 15000;
@@ -221,7 +276,7 @@ export default function PantallaPage() {
     } catch {}
     escaneandoRef.current = false;
     setEscaneando(false);
-  }, [faceApiReady, cargarAccesos]);
+  }, [faceApiReady, cargarAccesos, reproducirSonido]);
 
   // Escaneo continuo — cada 1.5s, mucho más ágil que antes gracias al detector liviano.
   // Este efecto ahora solo depende de modo/faceApiReady (no de escanearFrame
@@ -238,10 +293,25 @@ export default function PantallaPage() {
     if (modo !== 'facial') detenerCamara();
   }, [modo, detenerCamara]);
 
+  // Liberar la cámara también al desmontar la página (ej. si se navega a
+  // otra sección estando en modo facial) — antes solo se liberaba al
+  // cambiar de modo, nunca al salir de la página por completo.
+  useEffect(() => {
+    return () => detenerCamara();
+  }, [detenerCamara]);
+
   // Registro manual por RUT
   const registrarManual = async () => {
     const rut = rutManual.trim();
     if (!rut) return;
+
+    if (!validarRut(rut)) {
+      setResultado({ tipo: 'no_encontrado', mensaje: 'RUT inválido — revisa los números' });
+      reproducirSonido('error');
+      setRutManual('');
+      rutInputRef.current?.focus();
+      return;
+    }
 
     setCargando(true);
     try {
@@ -250,7 +320,10 @@ export default function PantallaPage() {
 
       if (!usuario || !usuario.id) {
         setResultado({ tipo: 'no_encontrado', mensaje: 'Usuario no encontrado con ese RUT' });
+        reproducirSonido('error');
+        setRutManual('');
         setCargando(false);
+        rutInputRef.current?.focus();
         return;
       }
 
@@ -268,11 +341,17 @@ export default function PantallaPage() {
         planVigente: asData.planVigente,
       });
       setRutManual('');
-      if (!asData.duplicado) cargarAccesos();
+      if (!asData.duplicado) {
+        cargarAccesos();
+        reproducirSonido(asData.planVigente ? 'exito' : 'aviso');
+      }
     } catch {
       setResultado({ tipo: 'error', mensaje: 'Error de conexión' });
+      reproducirSonido('error');
+      setRutManual('');
     }
     setCargando(false);
+    rutInputRef.current?.focus();
   };
 
   const coloresResultado: Record<string, { bg: string; border: string; texto: string }> = {
@@ -484,6 +563,7 @@ export default function PantallaPage() {
               </h2>
               <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
                 <input
+                  ref={rutInputRef}
                   value={rutManual}
                   onChange={e => setRutManual(formatearRut(e.target.value))}
                   onKeyDown={e => e.key === 'Enter' && registrarManual()}

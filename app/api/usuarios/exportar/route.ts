@@ -2,26 +2,24 @@ export const dynamic = 'force-dynamic';
 import { NextResponse } from 'next/server';
 import { neon } from '@neondatabase/serverless';
 import * as XLSX from 'xlsx';
-import { planLabel, mensajeVencimiento } from '@/lib/utils';
+import { planLabel, mensajeVencimiento, estadoPlan, formatDate, hoyISO } from '@/lib/utils';
 
 const sql = neon(process.env.POSTGRES_URL ?? process.env.DATABASE_URL!);
 
 export async function GET() {
   try {
     const usuarios = await sql`SELECT * FROM usuarios ORDER BY nombre ASC`;
-    const hoy = new Date();
 
     const filas = usuarios.map((u: any) => {
-      const vencimiento = new Date(u.plan_vencimiento);
-      const estado = !u.activo ? 'Inactivo' : vencimiento >= hoy ? 'Activo' : 'Vencido';
+      const estado = !u.activo ? 'Inactivo' : estadoPlan(u.plan_vencimiento) === 'vencido' ? 'Vencido' : 'Activo';
       return {
         'Nombre': u.nombre,
         'RUT': u.rut,
         'Email': u.email || '',
         'Teléfono': u.telefono || '',
         'Plan': planLabel(u.plan_tipo),
-        'Fecha de Ingreso': u.plan_inicio ? new Date(u.plan_inicio).toLocaleDateString('es-CL') : '',
-        'Fecha de Término': u.plan_vencimiento ? new Date(u.plan_vencimiento).toLocaleDateString('es-CL') : '',
+        'Fecha de Ingreso': u.plan_inicio ? formatDate(u.plan_inicio) : '',
+        'Fecha de Término': u.plan_vencimiento ? formatDate(u.plan_vencimiento) : '',
         'Estado': estado,
         'Vencimiento': mensajeVencimiento(u.plan_vencimiento),
       };
@@ -44,12 +42,11 @@ export async function GET() {
     XLSX.utils.book_append_sheet(libro, hoja, 'Usuarios');
     const buffer = XLSX.write(libro, { type: 'buffer', bookType: 'xlsx' });
 
-    const fecha = hoy.toISOString().split('T')[0];
     return new NextResponse(buffer, {
       status: 200,
       headers: {
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition': `attachment; filename="usuarios-clubfit-${fecha}.xlsx"`,
+        'Content-Disposition': `attachment; filename="usuarios-clubfit-${hoyISO()}.xlsx"`,
       },
     });
   } catch (e: any) {

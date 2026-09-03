@@ -1,6 +1,7 @@
 export const dynamic = 'force-dynamic';
 import { NextRequest, NextResponse } from 'next/server';
 import { neon } from '@neondatabase/serverless';
+import { diasParaVencer, formatDate } from '@/lib/utils';
 
 const sql = neon(process.env.POSTGRES_URL ?? process.env.DATABASE_URL!);
 
@@ -27,9 +28,10 @@ export async function POST(req: NextRequest) {
     }
 
     const usuario = usuarios[0];
-    const hoy = new Date();
-    const vencimiento = new Date(usuario.plan_vencimiento);
-    const planVigente = vencimiento >= hoy;
+    // Mismo criterio en toda la app: compara por día calendario en Chile,
+    // no por instante exacto, para que el plan siga vigente durante TODO
+    // el día en que vence (ver detalle en lib/utils.ts).
+    const planVigente = diasParaVencer(usuario.plan_vencimiento) >= 0;
 
     // Chequeo de duplicado reciente
     const ultimas = await sql`
@@ -62,7 +64,7 @@ export async function POST(req: NextRequest) {
       planVigente,
       mensaje: planVigente 
         ? `¡Bienvenido/a, ${usuario.nombre}!` 
-        : `Plan vencido el ${new Date(usuario.plan_vencimiento).toLocaleDateString('es-CL')}`
+        : `Plan vencido el ${formatDate(usuario.plan_vencimiento)}`
     });
   } catch (e: any) {
     return NextResponse.json({ error: e.message }, { status: 500 });
@@ -88,11 +90,17 @@ export async function GET(req: NextRequest) {
 
     // Todas las asistencias de hoy, sin límite — para que el contador
     // "Asistencias Hoy" del panel no se quede pegado en el tope de LIMIT.
+    // OJO: se compara por el día calendario en Chile, no en UTC — Neon (como
+    // Vercel) guarda y calcula CURRENT_DATE en UTC por defecto, así que
+    // usar CURRENT_DATE a secas hace que, entre ~20h y medianoche hora de
+    // Chile, las asistencias de "hoy" ya se contaran como si fueran de
+    // "mañana" (o se perdieran del conteo del día).
     if (soloHoy) {
       const rows = await sql`
         SELECT a.*, u.nombre, u.rut FROM asistencias a
         JOIN usuarios u ON a.usuario_id = u.id
-        WHERE a.timestamp >= CURRENT_DATE AND a.timestamp < CURRENT_DATE + INTERVAL '1 day'
+        WHERE (a.timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date
+              = (NOW() AT TIME ZONE 'America/Santiago')::date
         ORDER BY a.timestamp DESC
       `;
       return NextResponse.json(rows);
@@ -110,7 +118,8 @@ export async function GET(req: NextRequest) {
 }
 
 // Reinicia el conteo de asistencias. Protegido: solo el panel admin puede llamarlo (ver proxy.ts).
-// ?todo=true borra todo el historial; sin ese parámetro, borra solo las asistencias de hoy.
+// ?todo=true borra todo el historial; sin ese parámetro, borra solo las asistencias de HOY EN CHILE
+// (mismo criterio de zona horaria explicado arriba, para que "hoy" sea consistente en toda la app).
 export async function DELETE(req: NextRequest) {
   try {
     const { searchParams } = new URL(req.url);
@@ -120,7 +129,8 @@ export async function DELETE(req: NextRequest) {
       ? await sql`DELETE FROM asistencias RETURNING id`
       : await sql`
           DELETE FROM asistencias
-          WHERE timestamp >= CURRENT_DATE AND timestamp < CURRENT_DATE + INTERVAL '1 day'
+          WHERE (timestamp AT TIME ZONE 'UTC' AT TIME ZONE 'America/Santiago')::date
+                = (NOW() AT TIME ZONE 'America/Santiago')::date
           RETURNING id
         `;
 
