@@ -4,14 +4,17 @@ import Link from 'next/link';
 import { formatearRut, validarRut, planLabel, formatDate, diasParaVencer } from '@/lib/utils';
 
 type Modo = 'espera' | 'facial' | 'manual';
-type ResultadoTipo = 'bienvenido' | 'vencido' | 'duplicado' | 'no_encontrado' | 'error' | null;
+type ResultadoTipo = 'bienvenido' | 'vencido' | 'duplicado' | 'no_encontrado' | 'error';
 
-interface Resultado {
+interface Notificacion {
+  id: number;
   tipo: ResultadoTipo;
   usuario?: any;
   mensaje?: string;
   planVigente?: boolean;
 }
+
+const DURACION_NOTIFICACION_MS = 7000;
 
 export default function PantallaPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -20,9 +23,18 @@ export default function PantallaPage() {
   const intervalRef = useRef<any>(null);
   const imgRef = useRef<HTMLImageElement | null>(null); // se reutiliza en cada escaneo, en vez de crear una imagen nueva cada vez
   const rutInputRef = useRef<HTMLInputElement>(null); // se mantiene con foco para escribir o usar un lector de código de barras sin hacer clic primero
+  const idNotifRef = useRef(0);
+  // Evita mostrar una notificación nueva para LA MISMA persona si ya se le
+  // mostró una hace pocos segundos (por ejemplo, si se queda parada frente a
+  // la cámara y el escaneo la vuelve a detectar). No afecta a otras personas:
+  // cada una se controla por su propio id.
+  const ultimaNotifPorUsuarioRef = useRef<Map<number, number>>(new Map());
+  const DEBOUNCE_MISMA_PERSONA_MS = 8000;
 
   const [modo, setModo] = useState<Modo>('espera');
-  const [resultado, setResultado] = useState<Resultado>({ tipo: null });
+  // Lista de notificaciones activas — puede haber varias al mismo tiempo si
+  // dos personas distintas ingresan una detrás de la otra.
+  const [notificaciones, setNotificaciones] = useState<Notificacion[]>([]);
   const [rutManual, setRutManual] = useState('');
   const [cargando, setCargando] = useState(false);
   const [faceApiReady, setFaceApiReady] = useState(false);
@@ -31,23 +43,34 @@ export default function PantallaPage() {
   const [escaneando, setEscaneando] = useState(false);
   const [ultimosAccesos, setUltimosAccesos] = useState<any[]>([]);
 
+  // Agrega una notificación a la lista y programa su propio auto-cierre a
+  // los 7 segundos — cada una es independiente, así que varias pueden estar
+  // en pantalla a la vez sin pisarse.
+  const mostrarNotificacion = useCallback((datos: Omit<Notificacion, 'id'>) => {
+    const id = ++idNotifRef.current;
+    setNotificaciones(prev => [...prev, { id, ...datos }]);
+    setTimeout(() => {
+      setNotificaciones(prev => prev.filter(n => n.id !== id));
+    }, DURACION_NOTIFICACION_MS);
+  }, []);
+
   // Refresco automático cada 6 horas cuando la pantalla está inactiva
-  // (sin resultado en pantalla ni un escaneo en curso). Esto es lo que hacen
-  // los kioscos/pantallas de acceso 24/7 en la práctica: por más optimizado
-  // que esté el código, un navegador con cámara + WebGL activos durante
-  // horas se va poniendo lento (memoria, buffers de video, etc.) — refrescar
-  // solos de vez en cuando resuelve eso de raíz sin cortar a nadie a mitad
-  // de un ingreso.
+  // (sin notificaciones en pantalla ni un escaneo en curso). Esto es lo que
+  // hacen los kioscos/pantallas de acceso 24/7 en la práctica: por más
+  // optimizado que esté el código, un navegador con cámara + WebGL activos
+  // durante horas se va poniendo lento (memoria, buffers de video, etc.) —
+  // refrescar solos de vez en cuando resuelve eso de raíz sin cortar a
+  // nadie a mitad de un ingreso.
   const HORAS_ENTRE_REFRESCOS = 6;
   const inicioRef = useRef(Date.now());
-  const estadoActualRef = useRef({ resultadoTipo: resultado.tipo, escaneando, cargando });
-  estadoActualRef.current = { resultadoTipo: resultado.tipo, escaneando, cargando };
+  const estadoActualRef = useRef({ hayNotificaciones: notificaciones.length > 0, escaneando, cargando });
+  estadoActualRef.current = { hayNotificaciones: notificaciones.length > 0, escaneando, cargando };
 
   useEffect(() => {
     const chequeo = setInterval(() => {
       const horasActivo = (Date.now() - inicioRef.current) / (1000 * 60 * 60);
-      const { resultadoTipo, escaneando: enEscaneo, cargando: enCarga } = estadoActualRef.current;
-      if (horasActivo >= HORAS_ENTRE_REFRESCOS && !resultadoTipo && !enEscaneo && !enCarga) {
+      const { hayNotificaciones, escaneando: enEscaneo, cargando: enCarga } = estadoActualRef.current;
+      if (horasActivo >= HORAS_ENTRE_REFRESCOS && !hayNotificaciones && !enEscaneo && !enCarga) {
         window.location.reload();
       }
     }, 60000); // revisa cada minuto si ya toca y si es un buen momento para no interrumpir a nadie
@@ -61,17 +84,6 @@ export default function PantallaPage() {
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, []);
-
-  // Auto-limpiar resultado después de 15 segundos
-  useEffect(() => {
-    if (resultado.tipo) {
-      const t = setTimeout(() => {
-        setResultado({ tipo: null });
-        if (modo === 'facial') setModo('facial'); // mantiene cámara
-      }, 15000);
-      return () => clearTimeout(t);
-    }
-  }, [resultado]);
 
   // Cargar últimos accesos
   const cargarAccesos = useCallback(async () => {
@@ -148,9 +160,9 @@ export default function PantallaPage() {
       streamRef.current = s;
       if (videoRef.current) videoRef.current.srcObject = s;
     } catch {
-      setResultado({ tipo: 'error', mensaje: 'No se pudo acceder a la cámara' });
+      mostrarNotificacion({ tipo: 'error', mensaje: 'No se pudo acceder a la cámara' });
     }
-  }, []);
+  }, [mostrarNotificacion]);
 
   const detenerCamara = useCallback(() => {
     if (intervalRef.current) { clearInterval(intervalRef.current); intervalRef.current = null; }
@@ -198,28 +210,31 @@ export default function PantallaPage() {
   // Activar modo facial
   const activarFacial = useCallback(async () => {
     setModo('facial');
-    setResultado({ tipo: null });
     await iniciarCamara();
     if (!faceApiReady) await cargarFaceApi();
   }, [iniciarCamara, cargarFaceApi, faceApiReady]);
 
   // Escanear frame y buscar rostro.
-  // IMPORTANTE: escaneandoRef/pausadoHastaRef son refs (no estado) a propósito.
-  // Antes, el "pausar 15s tras un reconocimiento" se hacía cancelando y
-  // recreando el setInterval — pero como escanearFrame dependía de `escaneando`
-  // (estado), cada vez que terminaba un escaneo se generaba una NUEVA versión
-  // de la función, lo que disparaba el useEffect de más abajo y creaba OTRO
-  // intervalo en paralelo sin cancelar el anterior. Con cada persona
-  // reconocida quedaba un intervalo "huérfano" corriendo para siempre — por
-  // eso se iba pegando cada vez más rápido con cada ingreso. Usando refs para
-  // el control interno, escanearFrame ya no cambia de referencia y el
+  // IMPORTANTE: escaneandoRef es una ref (no estado) a propósito. Antes,
+  // pausar el escaneo tras un reconocimiento se hacía cancelando y
+  // recreando el setInterval — pero como escanearFrame dependía de un
+  // estado que cambiaba en cada ciclo, cada escaneo generaba una NUEVA
+  // versión de la función, lo que disparaba el useEffect de más abajo y
+  // creaba OTRO intervalo en paralelo sin cancelar el anterior. Con cada
+  // persona reconocida quedaba un intervalo "huérfano" corriendo para
+  // siempre. Usando una ref, escanearFrame ya no cambia de referencia y el
   // intervalo se crea una sola vez.
+  //
+  // Tampoco hay una pausa GLOBAL tras reconocer a alguien: si dos personas
+  // entran seguidas, la segunda debe reconocerse igual sin esperar a que
+  // termine el aviso de la primera. Lo único que se controla es no repetir
+  // el aviso para LA MISMA persona si se le acaba de mostrar uno (ver
+  // ultimaNotifPorUsuarioRef más arriba).
   const escaneandoRef = useRef(false);
-  const pausadoHastaRef = useRef(0);
 
   const escanearFrame = useCallback(async () => {
     if (!videoRef.current || !canvasRef.current) return;
-    if (escaneandoRef.current || Date.now() < pausadoHastaRef.current) return;
+    if (escaneandoRef.current) return;
     // @ts-ignore
     if (!window.faceapi || !faceApiReady) return;
 
@@ -258,25 +273,30 @@ export default function PantallaPage() {
         const data = await res.json();
 
         if (data.encontrado) {
-          setResultado({
-            tipo: data.duplicado ? 'duplicado' : data.planVigente ? 'bienvenido' : 'vencido',
-            usuario: data.usuario,
-            mensaje: data.mensaje,
-            planVigente: data.planVigente,
-          });
-          if (!data.duplicado) {
-            cargarAccesos();
-            reproducirSonido(data.planVigente ? 'exito' : 'aviso');
+          const uid = data.usuario.id;
+          const ahora = Date.now();
+          const ultimaVez = ultimaNotifPorUsuarioRef.current.get(uid) || 0;
+          // Evita repetir el aviso de la MISMA persona si se quedó parada
+          // frente a la cámara — no afecta a otras personas.
+          if (ahora - ultimaVez >= DEBOUNCE_MISMA_PERSONA_MS) {
+            ultimaNotifPorUsuarioRef.current.set(uid, ahora);
+            mostrarNotificacion({
+              tipo: data.duplicado ? 'duplicado' : data.planVigente ? 'bienvenido' : 'vencido',
+              usuario: data.usuario,
+              mensaje: data.mensaje,
+              planVigente: data.planVigente,
+            });
+            if (!data.duplicado) {
+              cargarAccesos();
+              reproducirSonido(data.planVigente ? 'exito' : 'aviso');
+            }
           }
-          // Pausa simple sin tocar el intervalo: los próximos ticks se
-          // ignoran solos hasta que pase el tiempo, sin crear intervalos nuevos.
-          pausadoHastaRef.current = Date.now() + 15000;
         }
       }
     } catch {}
     escaneandoRef.current = false;
     setEscaneando(false);
-  }, [faceApiReady, cargarAccesos, reproducirSonido]);
+  }, [faceApiReady, cargarAccesos, reproducirSonido, mostrarNotificacion]);
 
   // Escaneo continuo — cada 1.5s, mucho más ágil que antes gracias al detector liviano.
   // Este efecto ahora solo depende de modo/faceApiReady (no de escanearFrame
@@ -306,7 +326,7 @@ export default function PantallaPage() {
     if (!rut) return;
 
     if (!validarRut(rut)) {
-      setResultado({ tipo: 'no_encontrado', mensaje: 'RUT inválido — revisa los números' });
+      mostrarNotificacion({ tipo: 'no_encontrado', mensaje: 'RUT inválido — revisa los números' });
       reproducirSonido('error');
       setRutManual('');
       rutInputRef.current?.focus();
@@ -319,7 +339,7 @@ export default function PantallaPage() {
       const usuario = await res.json();
 
       if (!usuario || !usuario.id) {
-        setResultado({ tipo: 'no_encontrado', mensaje: 'Usuario no encontrado con ese RUT' });
+        mostrarNotificacion({ tipo: 'no_encontrado', mensaje: 'Usuario no encontrado con ese RUT' });
         reproducirSonido('error');
         setRutManual('');
         setCargando(false);
@@ -334,7 +354,7 @@ export default function PantallaPage() {
       });
       const asData = await asRes.json();
 
-      setResultado({
+      mostrarNotificacion({
         tipo: asData.duplicado ? 'duplicado' : asData.planVigente ? 'bienvenido' : 'vencido',
         usuario: asData.usuario || usuario,
         mensaje: asData.mensaje,
@@ -346,7 +366,7 @@ export default function PantallaPage() {
         reproducirSonido(asData.planVigente ? 'exito' : 'aviso');
       }
     } catch {
-      setResultado({ tipo: 'error', mensaje: 'Error de conexión' });
+      mostrarNotificacion({ tipo: 'error', mensaje: 'Error de conexión' });
       reproducirSonido('error');
       setRutManual('');
     }
@@ -414,67 +434,72 @@ export default function PantallaPage() {
         {/* Panel central */}
         <main style={{ flex: 1, padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           
-          {/* Resultado de identificación */}
-          {resultado.tipo && (() => {
-            // El caso "duplicado" (ya marcó hace poco) se ve igual que un ingreso
-            // normal — verde o ámbar según si el plan sigue vigente — en vez de un
-            // color neutro aparte.
-            const estiloTipo = resultado.tipo === 'duplicado'
-              ? (resultado.planVigente ? 'bienvenido' : 'vencido')
-              : resultado.tipo;
-            const estilo = coloresResultado[estiloTipo];
-            return (
-            <div style={{
-              background: estilo.bg,
-              border: `2px solid ${estilo.border}`,
-              borderRadius: '16px', padding: '2rem 2.5rem',
-              animation: 'fadeIn 0.3s ease',
-            }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '2rem' }}>
-                {resultado.usuario?.foto && (
-                  <img src={resultado.usuario.foto} alt=""
-                    style={{ width: '90px', height: '90px', borderRadius: '50%', objectFit: 'cover', border: `3px solid ${estilo.border}`, flexShrink: 0 }} />
-                )}
-                <div>
-                  {resultado.usuario ? (
-                    <>
-                      {/* Bienvenida grande y motivacional */}
-                      <div style={{
-                        fontSize: '2.5rem', fontWeight: 900, lineHeight: 1.15,
-                        color: estilo.texto,
-                      }}>
-                        ¡Bienvenid@, {resultado.usuario.nombre}!
-                      </div>
-                      <div style={{ fontSize: '1.3rem', fontWeight: 600, color: '#ffffff', marginTop: '0.2rem' }}>
-                        {resultado.planVigente ? 'a romper tus límites 💪' : '⚠️ tu plan está vencido'}
-                      </div>
+          {/* Notificaciones de identificación — pueden mostrarse varias a la
+              vez si dos personas distintas ingresan una detrás de la otra */}
+          {notificaciones.length > 0 && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+              {notificaciones.map(n => {
+                // El caso "duplicado" (ya marcó hace poco) se ve igual que un
+                // ingreso normal — verde o ámbar según si el plan sigue
+                // vigente — en vez de un color neutro aparte.
+                const estiloTipo = n.tipo === 'duplicado'
+                  ? (n.planVigente ? 'bienvenido' : 'vencido')
+                  : n.tipo;
+                const estilo = coloresResultado[estiloTipo];
+                return (
+                  <div key={n.id} style={{
+                    background: estilo.bg,
+                    border: `2px solid ${estilo.border}`,
+                    borderRadius: '16px', padding: '1.5rem 2rem',
+                    animation: 'fadeIn 0.3s ease',
+                  }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '1.5rem' }}>
+                      {n.usuario?.foto && (
+                        <img src={n.usuario.foto} alt=""
+                          style={{ width: '72px', height: '72px', borderRadius: '50%', objectFit: 'cover', border: `3px solid ${estilo.border}`, flexShrink: 0 }} />
+                      )}
+                      <div>
+                        {n.usuario ? (
+                          <>
+                            {/* Bienvenida grande y motivacional */}
+                            <div style={{
+                              fontSize: '2rem', fontWeight: 900, lineHeight: 1.15,
+                              color: estilo.texto,
+                            }}>
+                              ¡Bienvenid@, {n.usuario.nombre}!
+                            </div>
+                            <div style={{ fontSize: '1.1rem', fontWeight: 600, color: '#ffffff', marginTop: '0.2rem' }}>
+                              {n.planVigente ? 'a romper tus límites 💪' : '⚠️ tu plan está vencido'}
+                            </div>
 
-                      {/* Días restantes del plan, coloreados según cuánto queda — siempre visible */}
-                      <div style={{
-                        marginTop: '0.9rem', fontSize: '2.2rem', fontWeight: 800,
-                        color: colorDias(diasParaVencer(resultado.usuario.plan_vencimiento)),
-                      }}>
-                        {textoDias(diasParaVencer(resultado.usuario.plan_vencimiento))}
-                      </div>
+                            {/* Días restantes del plan, coloreados según cuánto queda — siempre visible */}
+                            <div style={{
+                              marginTop: '0.7rem', fontSize: '1.7rem', fontWeight: 800,
+                              color: colorDias(diasParaVencer(n.usuario.plan_vencimiento)),
+                            }}>
+                              {textoDias(diasParaVencer(n.usuario.plan_vencimiento))}
+                            </div>
 
-                      <div style={{ color: '#888', marginTop: '0.6rem', fontSize: '0.9rem' }}>
-                        {resultado.usuario.rut} — Plan: {planLabel(resultado.usuario.plan_tipo)}
-                        {' '}— Vence: {formatDate(resultado.usuario.plan_vencimiento)}
+                            <div style={{ color: '#888', marginTop: '0.5rem', fontSize: '0.85rem' }}>
+                              {n.usuario.rut} — Plan: {planLabel(n.usuario.plan_tipo)}
+                              {' '}— Vence: {formatDate(n.usuario.plan_vencimiento)}
+                            </div>
+                          </>
+                        ) : (
+                          <div style={{
+                            fontSize: '1.4rem', fontWeight: 800,
+                            color: estilo.texto,
+                          }}>
+                            {n.mensaje}
+                          </div>
+                        )}
                       </div>
-                    </>
-                  ) : (
-                    <div style={{
-                      fontSize: '1.6rem', fontWeight: 800,
-                      color: estilo.texto,
-                    }}>
-                      {resultado.mensaje}
                     </div>
-                  )}
-                </div>
-              </div>
+                  </div>
+                );
+              })}
             </div>
-            );
-          })()}
+          )}
 
           {/* Modos de identificación */}
           <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 0.8fr', gap: '1.5rem', flex: 1, alignItems: 'start' }}>
