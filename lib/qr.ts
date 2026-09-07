@@ -85,10 +85,23 @@ export function dataUrlABlob(dataUrl: string): Blob {
   return new Blob([bytes], { type: mime });
 }
 
+// Descarga directa de la imagen del QR — sin pasar por el selector de
+// compartir del sistema, siempre guarda el archivo (funciona igual en
+// computador y celular).
+export async function descargarQR(usuario: { nombre: string; rut: string }): Promise<void> {
+  const dataUrl = await generarImagenQR(usuario);
+  const a = document.createElement('a');
+  a.href = dataUrl;
+  a.download = `qr-${usuario.rut.replace(/\./g, '')}.png`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
 // Comparte la imagen del QR por WhatsApp (u otra app) usando el selector
 // nativo del sistema si está disponible (celulares principalmente); si no,
 // descarga el archivo para compartirlo manualmente.
-export async function compartirOdescargarQR(usuario: { nombre: string; rut: string }): Promise<'compartido' | 'descargado' | 'cancelado'> {
+export async function compartirQR(usuario: { nombre: string; rut: string }): Promise<'compartido' | 'descargado' | 'cancelado'> {
   const dataUrl = await generarImagenQR(usuario);
   const blob = dataUrlABlob(dataUrl);
   const archivo = new File([blob], `qr-${usuario.rut.replace(/\./g, '')}.png`, { type: 'image/png' });
@@ -109,11 +122,6 @@ export async function compartirOdescargarQR(usuario: { nombre: string; rut: stri
     }
   }
 
-  const a = document.createElement('a');
-  a.href = dataUrl;
-  a.download = archivo.name;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
+  await descargarQR(usuario);
   return 'descargado';
 }

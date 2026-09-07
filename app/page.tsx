@@ -23,7 +23,7 @@ export default function Home() {
           Sistema de Control de Asistencia
         </p>
       </div>
-      <div style={{ display: 'flex', gap: '1rem' }}>
+      <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap', justifyContent: 'center' }}>
         <Link href="/admin" style={{
           background: '#e50914',
           color: '#ffffff',
@@ -50,6 +50,20 @@ export default function Home() {
           border: '1px solid #2a2a2a',
         }}>
           Pantalla Acceso
+        </Link>
+        <Link href="/mi-qr" style={{
+          background: '#1e1e1e',
+          color: '#ffffff',
+          padding: '1rem 2rem',
+          borderRadius: '8px',
+          fontWeight: 700,
+          textDecoration: 'none',
+          fontSize: '1rem',
+          textTransform: 'uppercase',
+          letterSpacing: '1px',
+          border: '1px solid #2a2a2a',
+        }}>
+          🔳 Descargar mi QR
         </Link>
       </div>
     </main>

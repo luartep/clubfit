@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import FormUsuario from '@/components/admin/FormUsuario';
 import { planLabel, estadoPlan, formatDate, mensajeVencimiento, calcularRenovacion, linkWhatsapp } from '@/lib/utils';
-import { compartirOdescargarQR } from '@/lib/qr';
+import { descargarQR, compartirQR } from '@/lib/qr';
 
 export default function AdminPage() {
   const router = useRouter();
@@ -152,14 +152,23 @@ export default function AdminPage() {
     cargarUsuarios();
   };
 
-  // Genera la imagen del QR de acceso del socio y la comparte (celular, si el
-  // navegador lo permite) o la descarga (escritorio) para poder enviarla por
-  // WhatsApp como imagen.
+  // Genera la imagen del QR de acceso del socio para descargarla directo, o
+  // compartirla por WhatsApp (celular, si el navegador lo permite).
   const [generandoQrId, setGenerandoQrId] = useState<number | null>(null);
-  const generarQR = async (usuario: any) => {
+  const bajarQR = async (usuario: any) => {
     setGenerandoQrId(usuario.id);
     try {
-      await compartirOdescargarQR(usuario);
+      await descargarQR(usuario);
+    } catch {
+      alert('No se pudo generar el código QR. Intenta de nuevo.');
+    } finally {
+      setGenerandoQrId(null);
+    }
+  };
+  const enviarQR = async (usuario: any) => {
+    setGenerandoQrId(usuario.id);
+    try {
+      await compartirQR(usuario);
     } catch {
       alert('No se pudo generar el código QR. Intenta de nuevo.');
     } finally {
@@ -459,16 +468,27 @@ export default function AdminPage() {
                                 fontSize: '0.8rem',
                               }}>🔄</button>
                               <button
-                                onClick={() => generarQR(u)}
+                                onClick={() => bajarQR(u)}
                                 disabled={generandoQrId === u.id}
-                                title="Código QR de acceso (compartir/descargar)"
+                                title="Descargar código QR de acceso"
                                 style={{
                                   background: '#1e1e1e', color: '#ffffff', border: '1px solid #2a2a2a',
                                   borderRadius: '6px', padding: '0.3rem 0.75rem',
                                   cursor: generandoQrId === u.id ? 'default' : 'pointer',
                                   fontSize: '0.8rem', opacity: generandoQrId === u.id ? 0.5 : 1,
                                 }}
-                              >{generandoQrId === u.id ? '⏳' : '🔳'}</button>
+                              >{generandoQrId === u.id ? '⏳' : '🔳📥'}</button>
+                              <button
+                                onClick={() => enviarQR(u)}
+                                disabled={generandoQrId === u.id}
+                                title="Compartir código QR (WhatsApp / apps)"
+                                style={{
+                                  background: '#1e1e1e', color: '#25D366', border: '1px solid #25D366',
+                                  borderRadius: '6px', padding: '0.3rem 0.75rem',
+                                  cursor: generandoQrId === u.id ? 'default' : 'pointer',
+                                  fontSize: '0.8rem', opacity: generandoQrId === u.id ? 0.5 : 1,
+                                }}
+                              >{generandoQrId === u.id ? '⏳' : '🔳📤'}</button>
                               {wa && (
                                 <a
                                   href={wa}
