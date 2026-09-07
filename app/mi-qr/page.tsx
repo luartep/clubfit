@@ -1,7 +1,7 @@
 'use client';
 import { useState } from 'react';
 import Link from 'next/link';
-import { formatearRut, validarRut } from '@/lib/utils';
+import { formatearRut, validarRut, diasParaVencer, planLabel, formatDate } from '@/lib/utils';
 import { generarImagenQR, descargarQR } from '@/lib/qr';
 
 export default function MiQRPage() {
@@ -54,6 +54,19 @@ export default function MiQRPage() {
     } finally {
       setDescargando(false);
     }
+  };
+
+  // Mismo criterio de color que el resto de la app: verde con margen,
+  // amarillo cerca del vencimiento (10 días o menos), rojo si ya venció.
+  const colorDias = (dias: number) => {
+    if (dias <= 0) return '#ff3d71';
+    if (dias <= 10) return '#ffaa00';
+    return '#00e096';
+  };
+  const textoDias = (dias: number) => {
+    if (dias < 0) return `Tu plan venció hace ${Math.abs(dias)} día${Math.abs(dias) === 1 ? '' : 's'}`;
+    if (dias === 0) return 'Tu plan vence hoy';
+    return `Te quedan ${dias} día${dias === 1 ? '' : 's'} de tu plan`;
   };
 
   return (
@@ -123,9 +136,26 @@ export default function MiQRPage() {
 
         {usuario && previewQR && (
           <div style={{ marginTop: '1.5rem', textAlign: 'center' }}>
-            <p style={{ color: '#00e096', fontSize: '1rem', fontWeight: 700, marginBottom: '1rem' }}>
+            <p style={{ color: '#00e096', fontSize: '1rem', fontWeight: 700, marginBottom: '0.75rem' }}>
               ¡Hola, {usuario.nombre}! 👋
             </p>
+
+            {/* Días restantes del plan — se muestra ANTES del QR, no dentro de la imagen */}
+            <div style={{
+              background: '#1e1e1e', border: `1px solid ${colorDias(diasParaVencer(usuario.plan_vencimiento))}`,
+              borderRadius: '10px', padding: '0.85rem', marginBottom: '1.25rem',
+            }}>
+              <div style={{
+                color: colorDias(diasParaVencer(usuario.plan_vencimiento)),
+                fontWeight: 800, fontSize: '1.15rem',
+              }}>
+                {textoDias(diasParaVencer(usuario.plan_vencimiento))}
+              </div>
+              <div style={{ color: '#888', fontSize: '0.8rem', marginTop: '0.3rem' }}>
+                Plan {planLabel(usuario.plan_tipo)} — vence el {formatDate(usuario.plan_vencimiento)}
+              </div>
+            </div>
+
             <img src={previewQR} alt="Tu código QR" style={{
               width: '100%', maxWidth: '260px', borderRadius: '12px', border: '1px solid #2a2a2a',
             }} />
