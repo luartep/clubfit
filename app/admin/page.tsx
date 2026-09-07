@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import FormUsuario from '@/components/admin/FormUsuario';
 import { planLabel, estadoPlan, formatDate, mensajeVencimiento, calcularRenovacion, linkWhatsapp } from '@/lib/utils';
+import { compartirOdescargarQR } from '@/lib/qr';
 
 export default function AdminPage() {
   const router = useRouter();
@@ -149,6 +150,21 @@ export default function AdminPage() {
     });
     if (!res.ok) { alert('No se pudo renovar el plan. Intenta de nuevo.'); return; }
     cargarUsuarios();
+  };
+
+  // Genera la imagen del QR de acceso del socio y la comparte (celular, si el
+  // navegador lo permite) o la descarga (escritorio) para poder enviarla por
+  // WhatsApp como imagen.
+  const [generandoQrId, setGenerandoQrId] = useState<number | null>(null);
+  const generarQR = async (usuario: any) => {
+    setGenerandoQrId(usuario.id);
+    try {
+      await compartirOdescargarQR(usuario);
+    } catch {
+      alert('No se pudo generar el código QR. Intenta de nuevo.');
+    } finally {
+      setGenerandoQrId(null);
+    }
   };
 
   const reiniciarConteo = async (todo: boolean) => {
@@ -442,6 +458,17 @@ export default function AdminPage() {
                                 borderRadius: '6px', padding: '0.3rem 0.75rem', cursor: 'pointer',
                                 fontSize: '0.8rem',
                               }}>🔄</button>
+                              <button
+                                onClick={() => generarQR(u)}
+                                disabled={generandoQrId === u.id}
+                                title="Código QR de acceso (compartir/descargar)"
+                                style={{
+                                  background: '#1e1e1e', color: '#ffffff', border: '1px solid #2a2a2a',
+                                  borderRadius: '6px', padding: '0.3rem 0.75rem',
+                                  cursor: generandoQrId === u.id ? 'default' : 'pointer',
+                                  fontSize: '0.8rem', opacity: generandoQrId === u.id ? 0.5 : 1,
+                                }}
+                              >{generandoQrId === u.id ? '⏳' : '🔳'}</button>
                               {wa && (
                                 <a
                                   href={wa}
@@ -542,7 +569,7 @@ export default function AdminPage() {
                         background: '#1e1e1e', borderRadius: '6px',
                         padding: '0.2rem 0.6rem', fontSize: '0.8rem', color: '#e50914',
                       }}>
-                        {a.metodo === 'facial' ? '🤳 Facial' : a.metodo === 'huella' ? '👆 Huella' : '✍️ Manual'}
+                        {a.metodo === 'facial' ? '🤳 Facial' : a.metodo === 'qr' ? '🔳 QR' : a.metodo === 'huella' ? '👆 Huella' : '✍️ Manual'}
                       </span>
                     </td>
                     <td style={{ padding: '0.75rem 1rem' }}>

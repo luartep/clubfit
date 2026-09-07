@@ -30,6 +30,12 @@ export default function PantallaPage() {
   // cada una se controla por su propio id.
   const ultimaNotifPorUsuarioRef = useRef<Map<number, number>>(new Map());
   const DEBOUNCE_MISMA_PERSONA_MS = 8000;
+  // Lo mismo, pero para el aviso de "rostro no reconocido" — como ahí no hay
+  // un id de usuario para diferenciar personas, se usa un único cronómetro
+  // global para no repetir el aviso todo el rato si alguien se queda mirando
+  // la cámara sin ser identificado.
+  const ultimoNoReconocidoRef = useRef(0);
+  const DEBOUNCE_NO_RECONOCIDO_MS = 8000;
 
   const [modo, setModo] = useState<Modo>('espera');
   // Lista de notificaciones activas — puede haber varias al mismo tiempo si
@@ -151,6 +157,21 @@ export default function PantallaPage() {
     document.head.appendChild(script);
   }, []);
 
+  // Cargar jsQR (lectura de códigos QR) — se usa como respaldo cuando el
+  // rostro no se reconoce: la persona muestra su QR a la cámara en vez de
+  // (o además de) su cara. Es una librería chica y sin dependencias, se
+  // carga igual que face-api.js, por CDN.
+  const [jsQrListo, setJsQrListo] = useState(false);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    // @ts-ignore
+    if (window.jsQR) { setJsQrListo(true); return; }
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js';
+    script.onload = () => setJsQrListo(true);
+    document.head.appendChild(script);
+  }, []);
+
   // Iniciar cámara
   const iniciarCamara = useCallback(async () => {
     try {
@@ -207,6 +228,35 @@ export default function PantallaPage() {
     } catch {}
   }, []);
 
+  // Muestra la notificación de un ingreso (facial, QR o manual) a partir de
+  // la respuesta del servidor — sin límite de repetición, se usa en el
+  // registro manual donde cada intento es una acción deliberada del staff.
+  const emitirNotificacionIngreso = useCallback((data: any) => {
+    mostrarNotificacion({
+      tipo: data.duplicado ? 'duplicado' : data.planVigente ? 'bienvenido' : 'vencido',
+      usuario: data.usuario,
+      mensaje: data.mensaje,
+      planVigente: data.planVigente,
+    });
+    if (!data.duplicado) {
+      cargarAccesos();
+      reproducirSonido(data.planVigente ? 'exito' : 'aviso');
+    }
+  }, [cargarAccesos, reproducirSonido, mostrarNotificacion]);
+
+  // Igual que la anterior, pero para el escaneo continuo (facial/QR por
+  // cámara): evita repetir el aviso de la MISMA persona si se queda parada
+  // frente a la cámara. No afecta a otras personas que se detecten mientras tanto.
+  const notificarIngresoEscaneo = useCallback((data: any) => {
+    if (!data.usuario) return;
+    const uid = data.usuario.id;
+    const ahora = Date.now();
+    const ultimaVez = ultimaNotifPorUsuarioRef.current.get(uid) || 0;
+    if (ahora - ultimaVez < DEBOUNCE_MISMA_PERSONA_MS) return;
+    ultimaNotifPorUsuarioRef.current.set(uid, ahora);
+    emitirNotificacionIngreso(data);
+  }, [emitirNotificacionIngreso]);
+
   // Activar modo facial
   const activarFacial = useCallback(async () => {
     setModo('facial');
@@ -261,9 +311,13 @@ export default function PantallaPage() {
         .withFaceDescriptor();
 
       // Si la cara está muy chica (persona lejos de la cámara), el descriptor
-      // sale de mala calidad — se ignora en silencio y se sigue escaneando,
-      // en vez de mandar un descriptor poco confiable al servidor.
-      if (detection && detection.detection.box.width >= anchoVideo * 0.16) {
+      // sale de mala calidad — se ignora en silencio y no se cuenta como
+      // "cara detectada" para el aviso de no-reconocido más abajo.
+      const hayRostroClaro = !!detection && detection.detection.box.width >= anchoVideo * 0.16;
+      let resuelto = false;
+      let qrIntentadoSinExito = false;
+
+      if (hayRostroClaro) {
         const descriptor = Array.from(detection.descriptor);
         const res = await fetch('/api/asistencia/facial', {
           method: 'POST',
@@ -271,32 +325,58 @@ export default function PantallaPage() {
           body: JSON.stringify({ descriptor }),
         });
         const data = await res.json();
-
         if (data.encontrado) {
-          const uid = data.usuario.id;
-          const ahora = Date.now();
-          const ultimaVez = ultimaNotifPorUsuarioRef.current.get(uid) || 0;
-          // Evita repetir el aviso de la MISMA persona si se quedó parada
-          // frente a la cámara — no afecta a otras personas.
-          if (ahora - ultimaVez >= DEBOUNCE_MISMA_PERSONA_MS) {
-            ultimaNotifPorUsuarioRef.current.set(uid, ahora);
-            mostrarNotificacion({
-              tipo: data.duplicado ? 'duplicado' : data.planVigente ? 'bienvenido' : 'vencido',
-              usuario: data.usuario,
-              mensaje: data.mensaje,
-              planVigente: data.planVigente,
-            });
-            if (!data.duplicado) {
-              cargarAccesos();
-              reproducirSonido(data.planVigente ? 'exito' : 'aviso');
+          notificarIngresoEscaneo(data);
+          resuelto = true;
+        }
+      }
+
+      // Respaldo con código QR: si el rostro no coincidió con nadie (o no
+      // había una cara clara), se busca un QR de socio en el mismo cuadro
+      // antes de rendirse — útil para quien no tiene foto registrada o no
+      // fue bien reconocido por la cámara.
+      // @ts-ignore
+      if (!resuelto && jsQrListo && window.jsQR) {
+        try {
+          const imageData = ctx.getImageData(0, 0, canvasRef.current.width, canvasRef.current.height);
+          // @ts-ignore
+          const codigo = window.jsQR(imageData.data, imageData.width, imageData.height);
+          if (codigo?.data?.startsWith('CLUBFIT|')) {
+            qrIntentadoSinExito = true;
+            const rutQr = codigo.data.split('|')[1] || '';
+            if (validarRut(rutQr)) {
+              const resU = await fetch(`/api/usuarios?rut=${encodeURIComponent(rutQr)}`);
+              const usuarioQr = await resU.json();
+              if (usuarioQr && usuarioQr.id) {
+                const asRes = await fetch('/api/asistencia', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ usuarioId: usuarioQr.id, metodo: 'qr' }),
+                });
+                const asData = await asRes.json();
+                notificarIngresoEscaneo({ ...asData, usuario: asData.usuario || usuarioQr });
+                resuelto = true;
+              }
             }
           }
+        } catch {}
+      }
+
+      // Si había una cara clara pero no se pudo identificar ni por rostro ni
+      // por QR, avisar — con su propio "no repetir seguido" para no
+      // spamear si alguien se queda mirando la cámara sin ser reconocido.
+      if (!resuelto && (hayRostroClaro || qrIntentadoSinExito)) {
+        const ahora = Date.now();
+        if (ahora - ultimoNoReconocidoRef.current >= DEBOUNCE_NO_RECONOCIDO_MS) {
+          ultimoNoReconocidoRef.current = ahora;
+          mostrarNotificacion({ tipo: 'no_encontrado', mensaje: 'No se pudo identificar — prueba con tu RUT' });
+          reproducirSonido('error');
         }
       }
     } catch {}
     escaneandoRef.current = false;
     setEscaneando(false);
-  }, [faceApiReady, cargarAccesos, reproducirSonido, mostrarNotificacion]);
+  }, [faceApiReady, jsQrListo, reproducirSonido, mostrarNotificacion, notificarIngresoEscaneo]);
 
   // Escaneo continuo — cada 1.5s, mucho más ágil que antes gracias al detector liviano.
   // Este efecto ahora solo depende de modo/faceApiReady (no de escanearFrame
@@ -354,17 +434,8 @@ export default function PantallaPage() {
       });
       const asData = await asRes.json();
 
-      mostrarNotificacion({
-        tipo: asData.duplicado ? 'duplicado' : asData.planVigente ? 'bienvenido' : 'vencido',
-        usuario: asData.usuario || usuario,
-        mensaje: asData.mensaje,
-        planVigente: asData.planVigente,
-      });
+      emitirNotificacionIngreso({ ...asData, usuario: asData.usuario || usuario });
       setRutManual('');
-      if (!asData.duplicado) {
-        cargarAccesos();
-        reproducirSonido(asData.planVigente ? 'exito' : 'aviso');
-      }
     } catch {
       mostrarNotificacion({ tipo: 'error', mensaje: 'Error de conexión' });
       reproducirSonido('error');
@@ -512,7 +583,7 @@ export default function PantallaPage() {
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                 <h2 style={{ color: '#e50914', fontSize: '1.1rem', fontWeight: 700 }}>
-                  🤳 Reconocimiento Facial
+                  🤳 Reconocimiento Facial / QR
                 </h2>
                 {modo === 'facial' && (
                   <button onClick={() => setModo('espera')} style={{
@@ -530,7 +601,7 @@ export default function PantallaPage() {
                 }}>
                   <div style={{ fontSize: '4rem' }}>📷</div>
                   <p style={{ color: '#888', textAlign: 'center', fontSize: '0.9rem' }}>
-                    Identifica a los socios automáticamente con su rostro
+                    Identifica a los socios con su rostro — o mostrando su código QR si no tienen foto registrada
                   </p>
                   <button onClick={activarFacial} style={{
                     background: '#e50914', color: '#ffffff', border: 'none',

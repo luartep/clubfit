@@ -21,7 +21,7 @@ export async function GET() {
       'Fecha y Hora': new Date(a.timestamp).toLocaleString('es-CL', { timeZone: 'America/Santiago' }),
       'Nombre': a.nombre,
       'RUT': a.rut,
-      'Método': a.metodo === 'facial' ? 'Facial' : a.metodo === 'huella' ? 'Huella' : 'Manual',
+      'Método': a.metodo === 'facial' ? 'Facial' : a.metodo === 'qr' ? 'QR' : a.metodo === 'huella' ? 'Huella' : 'Manual',
       'Resultado': a.exitoso ? 'Ingresó' : 'Denegado',
     }));
 
