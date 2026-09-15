@@ -3,105 +3,16 @@ import { NextRequest, NextResponse } from 'next/server';
 export const SESSION_COOKIE = 'clubfit_admin_session';
 export const SESSION_VALUE = process.env.ADMIN_SESSION_SECRET || 'clubfit-secret-2026-pala';
 
-function estaAutenticado(req: NextRequest): boolean {
-  return req.cookies.get(SESSION_COOKIE)?.value === SESSION_VALUE;
-}
+// LOGIN TEMPORALMENTE DESACTIVADO — todas las rutas son públicas
+// Reactivar cuando Neon vuelva a estar disponible:
+//   1. Descomentar la función estaAutenticado
+//   2. Restaurar los bloques de verificación en proxy()
+//   3. Restaurar el matcher completo
 
-export function proxy(req: NextRequest) {
-  const { pathname, searchParams } = req.nextUrl;
-
-  // Panel de administración (páginas): exige sesión iniciada
-  if (pathname.startsWith('/admin')) {
-    if (!estaAutenticado(req)) {
-      const url = req.nextUrl.clone();
-      url.pathname = '/login';
-      url.searchParams.set('next', pathname);
-      return NextResponse.redirect(url);
-    }
-    return NextResponse.next();
-  }
-
-  // Exportar Excel de usuarios: solo admin
-  if (pathname === '/api/usuarios/exportar') {
-    if (!estaAutenticado(req)) {
-      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-    }
-    return NextResponse.next();
-  }
-
-  // Listado general / alta de usuarios: solo admin.
-  // Excepción: la pantalla de acceso pública consulta por RUT exacto (?rut=...)
-  // para el ingreso manual, y eso debe seguir funcionando sin sesión.
-  if (pathname === '/api/usuarios') {
-    const esConsultaPublicaPorRut = req.method === 'GET' && !!searchParams.get('rut');
-    if (!esConsultaPublicaPorRut && !estaAutenticado(req)) {
-      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-    }
-    return NextResponse.next();
-  }
-
-  // Editar / eliminar un usuario puntual: solo admin
-  if (pathname.startsWith('/api/usuarios/')) {
-    if (!estaAutenticado(req)) {
-      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-    }
-    return NextResponse.next();
-  }
-
-  // ─── Rutas de huella ────────────────────────────────────────────────────────
-  // GET /api/huella/verificar  → público (la pantalla de acceso lo necesita)
-  // POST /api/huella/verificar → público (la pantalla de acceso registra ingreso)
-  // POST /api/huella/registrar → solo admin (registra nueva credencial de un socio)
-  // DELETE /api/huella/registrar → solo admin (elimina la credencial de un socio)
-  if (pathname === '/api/huella/registrar') {
-    if (!estaAutenticado(req)) {
-      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-    }
-    return NextResponse.next();
-  }
-  // /api/huella/verificar (GET y POST) queda sin restricción — pasa al siguiente
-
-  // Reiniciar el conteo o exportar el historial de asistencias: solo admin.
-  // GET (listado normal) y POST de /api/asistencia quedan públicos porque los usa la pantalla de acceso.
-  if (pathname === '/api/asistencia' && req.method === 'DELETE') {
-    if (!estaAutenticado(req)) {
-      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-    }
-    return NextResponse.next();
-  }
-  if (pathname === '/api/asistencia/exportar') {
-    if (!estaAutenticado(req)) {
-      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-    }
-    return NextResponse.next();
-  }
-  if (pathname === '/api/asistencia/resumen') {
-    if (!estaAutenticado(req)) {
-      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-    }
-    return NextResponse.next();
-  }
-
-  // Backup y restauración: solo admin
-  if (pathname.startsWith('/api/backup/')) {
-    if (!estaAutenticado(req)) {
-      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
-    }
-    return NextResponse.next();
-  }
-
+export function proxy(_req: NextRequest) {
   return NextResponse.next();
 }
 
 export const config = {
-  matcher: [
-    '/admin/:path*',
-    '/api/usuarios',
-    '/api/usuarios/:path*',
-    '/api/huella/:path*',
-    '/api/asistencia',
-    '/api/asistencia/exportar',
-    '/api/asistencia/resumen',
-    '/api/backup/:path*',
-  ],
+  matcher: [],
 };
