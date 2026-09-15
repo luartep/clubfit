@@ -352,13 +352,16 @@ export default function PantallaPage() {
       }
 
       // 2. Armar allowCredentials con todos los IDs conocidos
-      const allowCredentials: PublicKeyCredentialDescriptor[] = socios.map((s: any) => ({
-        type: 'public-key',
-        id: base64ToBuf(s.huella_id),
-        // Transports que usa el WA28: USB HID → 'usb'; también 'internal' para
-        // TPM/Windows Hello por si el PC lo ofrece como fallback.
-        transports: ['usb', 'internal'] as AuthenticatorTransport[],
-      }));
+      const allowCredentials: PublicKeyCredentialDescriptor[] = socios.map((s: any) => {
+        const buf = base64ToBuf(s.huella_id);
+        return {
+          type: 'public-key' as const,
+          id: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer,
+          // Transports que usa el WA28: USB HID → 'usb'; también 'internal' para
+          // TPM/Windows Hello por si el PC lo ofrece como fallback.
+          transports: ['usb', 'internal'] as AuthenticatorTransport[],
+        };
+      });
 
       // 3. Challenge aleatorio (el servidor podría generarlo; para la pantalla
       //    de acceso un nonce aleatorio en cliente es suficiente porque la

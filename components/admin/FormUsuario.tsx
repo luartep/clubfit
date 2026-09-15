@@ -218,7 +218,10 @@ export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Pro
           timeout: 60000,
           // Evitar registrar la misma credencial dos veces si ya hay una
           excludeCredentials: usuarioEditar?.huella_id
-            ? [{ type: 'public-key', id: base64ToBuf(usuarioEditar.huella_id) }]
+            ? (() => {
+                const buf = base64ToBuf(usuarioEditar.huella_id);
+                return [{ type: 'public-key' as const, id: buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer }];
+              })()
             : [],
         },
       }) as PublicKeyCredential | null;
