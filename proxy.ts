@@ -48,6 +48,19 @@ export function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // ─── Rutas de huella ────────────────────────────────────────────────────────
+  // GET /api/huella/verificar  → público (la pantalla de acceso lo necesita)
+  // POST /api/huella/verificar → público (la pantalla de acceso registra ingreso)
+  // POST /api/huella/registrar → solo admin (registra nueva credencial de un socio)
+  // DELETE /api/huella/registrar → solo admin (elimina la credencial de un socio)
+  if (pathname === '/api/huella/registrar') {
+    if (!estaAutenticado(req)) {
+      return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+    }
+    return NextResponse.next();
+  }
+  // /api/huella/verificar (GET y POST) queda sin restricción — pasa al siguiente
+
   // Reiniciar el conteo o exportar el historial de asistencias: solo admin.
   // GET (listado normal) y POST de /api/asistencia quedan públicos porque los usa la pantalla de acceso.
   if (pathname === '/api/asistencia' && req.method === 'DELETE') {
@@ -85,6 +98,7 @@ export const config = {
     '/admin/:path*',
     '/api/usuarios',
     '/api/usuarios/:path*',
+    '/api/huella/:path*',
     '/api/asistencia',
     '/api/asistencia/exportar',
     '/api/asistencia/resumen',

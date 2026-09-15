@@ -27,6 +27,23 @@ const labelStyle: React.CSSProperties = {
   marginBottom: '0.4rem', fontWeight: 500, textTransform: 'uppercase', letterSpacing: '0.5px',
 };
 
+// ─── Helpers WebAuthn ──────────────────────────────────────────────────────────
+function bufToBase64(buf: ArrayBuffer): string {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+function base64ToBuf(b64: string): Uint8Array {
+  const s = atob(b64.replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(s, c => c.charCodeAt(0));
+}
+
+// Texto del usuario que aparecerá en el diálogo del SO al pedir la huella
+function nombreParaWebAuthn(nombre: string): Uint8Array {
+  return new TextEncoder().encode(nombre.slice(0, 64));
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
 export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Props) {
   const inicioInicial = usuarioEditar?.plan_inicio
     ? String(usuarioEditar.plan_inicio).split('T')[0]
@@ -44,8 +61,6 @@ export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Pro
       ? String(usuarioEditar.plan_vencimiento).split('T')[0]
       : calcularVencimientoISO(inicioInicial, planInicialTipo),
   });
-  // Mientras no se edite manualmente la fecha de término, se recalcula
-  // automáticamente al cambiar el plan o la fecha de ingreso.
   const [vencimientoManual, setVencimientoManual] = useState(false);
   const [foto, setFoto] = useState<string>(usuarioEditar?.foto || '');
   const [fotoDescriptor, setFotoDescriptor] = useState<number[] | null>(
@@ -55,6 +70,14 @@ export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Pro
   const [errores, setErrores] = useState<Record<string, string>>({});
   const [enviando, setEnviando] = useState(false);
   const [errorGeneral, setErrorGeneral] = useState('');
+
+  // Estado huella
+  const [huellaRegistrada, setHuellaRegistrada] = useState<boolean>(
+    !!(usuarioEditar?.huella_id)
+  );
+  const [registrandoHuella, setRegistrandoHuella] = useState(false);
+  const [mensajeHuella, setMensajeHuella] = useState('');
+  const [errorHuella, setErrorHuella] = useState('');
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
     const { name, value } = e.target;
@@ -118,12 +141,11 @@ export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Pro
     if (!validar()) return;
     setEnviando(true);
     setErrorGeneral('');
-
     try {
-      const payload = {
+      const payload: any = {
         ...form,
-        foto: foto || undefined,
-        fotoDescriptor: fotoDescriptor ? JSON.stringify(fotoDescriptor) : undefined,
+        foto: foto || null,
+        fotoDescriptor: fotoDescriptor ? JSON.stringify(fotoDescriptor) : null,
       };
 
       const url = usuarioEditar ? `/api/usuarios/${usuarioEditar.id}` : '/api/usuarios';
@@ -152,6 +174,132 @@ export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Pro
     reader.readAsDataURL(file);
   };
 
+  // ─── Registrar huella con WebAuthn ───────────────────────────────────────────
+  const registrarHuella = async () => {
+    if (!usuarioEditar?.id) {
+      setErrorHuella('Guarda el usuario primero antes de registrar la huella');
+      return;
+    }
+    setRegistrandoHuella(true);
+    setErrorHuella('');
+    setMensajeHuella('Pon el dedo en el lector WA28...');
+
+    try {
+      // Challenge aleatorio — solo necesitamos crear la credencial, la verificación
+      // criptográfica real ocurre en el lector; nosotros guardamos el credentialId
+      const challenge = crypto.getRandomValues(new Uint8Array(32));
+
+      const credential = await navigator.credentials.create({
+        publicKey: {
+          challenge,
+          rp: {
+            // Debe coincidir exactamente con el dominio en producción (Vercel).
+            // En localhost funciona con 'localhost'.
+            id: window.location.hostname,
+            name: 'ClubFit',
+          },
+          user: {
+            // El id del usuario en WebAuthn es un buffer, usamos el id de BD
+            id: new TextEncoder().encode(String(usuarioEditar.id)),
+            name: usuarioEditar.rut,          // identificador único (RUT)
+            displayName: usuarioEditar.nombre,
+          },
+          pubKeyCredParams: [
+            { type: 'public-key', alg: -7 },   // ES256 (preferido)
+            { type: 'public-key', alg: -257 },  // RS256 (fallback Windows Hello)
+          ],
+          authenticatorSelection: {
+            // 'cross-platform' fuerza el uso de dispositivos externos (USB/NFC)
+            // como el WA28, en vez de TPM o Windows Hello integrado.
+            authenticatorAttachment: 'cross-platform',
+            userVerification: 'preferred',
+            residentKey: 'discouraged', // no ocupa espacio en el lector
+          },
+          timeout: 60000,
+          // Evitar registrar la misma credencial dos veces si ya hay una
+          excludeCredentials: usuarioEditar?.huella_id
+            ? [{ type: 'public-key', id: base64ToBuf(usuarioEditar.huella_id) }]
+            : [],
+        },
+      }) as PublicKeyCredential | null;
+
+      if (!credential) {
+        setErrorHuella('No se recibió respuesta del lector');
+        setRegistrandoHuella(false);
+        setMensajeHuella('');
+        return;
+      }
+
+      setMensajeHuella('Guardando en el servidor...');
+
+      const credentialId = bufToBase64(credential.rawId);
+      // Guardamos también la respuesta completa por si en el futuro se quiere
+      // verificar la firma del counter (prevención de replay avanzada).
+      const respuesta = credential.response as AuthenticatorAttestationResponse;
+      const credencial = JSON.stringify({
+        credentialId,
+        clientDataJSON: bufToBase64(respuesta.clientDataJSON),
+        attestationObject: bufToBase64(respuesta.attestationObject),
+      });
+
+      const res = await fetch('/api/huella/registrar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          usuarioId: usuarioEditar.id,
+          credentialId,
+          credencial,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Error al guardar en servidor');
+      }
+
+      setHuellaRegistrada(true);
+      setMensajeHuella('✓ Huella registrada correctamente');
+      // Actualizar el usuarioEditar en memoria para que excludeCredentials funcione
+      // si el admin intenta registrar de nuevo en esta misma sesión
+      if (usuarioEditar) usuarioEditar.huella_id = credentialId;
+    } catch (err: any) {
+      if (err?.name === 'NotAllowedError') {
+        setErrorHuella('El usuario canceló o el lector no respondió a tiempo');
+      } else if (err?.name === 'InvalidStateError') {
+        setErrorHuella('Esta credencial ya está registrada en el lector');
+      } else if (err?.name === 'NotSupportedError') {
+        setErrorHuella('El navegador no soporta WebAuthn o el lector no es compatible');
+      } else {
+        setErrorHuella(err?.message || 'Error al registrar la huella');
+      }
+      setMensajeHuella('');
+    }
+
+    setRegistrandoHuella(false);
+  };
+
+  // ─── Eliminar huella ──────────────────────────────────────────────────────────
+  const eliminarHuella = async () => {
+    if (!usuarioEditar?.id) return;
+    if (!confirm('¿Eliminar la huella registrada de este socio?')) return;
+
+    try {
+      const res = await fetch(`/api/huella/registrar?usuarioId=${usuarioEditar.id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error('No se pudo eliminar');
+      setHuellaRegistrada(false);
+      setMensajeHuella('Huella eliminada');
+      if (usuarioEditar) {
+        usuarioEditar.huella_id = null;
+        usuarioEditar.huella_credencial = null;
+      }
+    } catch {
+      setErrorHuella('No se pudo eliminar la huella');
+    }
+  };
+
+  // ─── Render ───────────────────────────────────────────────────────────────────
   return (
     <>
       {mostrarCamara && (
@@ -297,6 +445,101 @@ export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Pro
             </div>
           </div>
 
+          {/* ─── Sección Huella Digital ─────────────────────────────────────────── */}
+          {usuarioEditar && (
+            <div style={{
+              marginTop: '1.5rem',
+              background: '#0d0d0d',
+              border: `1px solid ${huellaRegistrada ? '#00e096' : '#2a2a2a'}`,
+              borderRadius: '12px',
+              padding: '1rem 1.25rem',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+                <span style={{ color: '#e50914', fontWeight: 700, fontSize: '0.85rem', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  🖐 Huella Digital (WA28)
+                </span>
+                {huellaRegistrada && (
+                  <span style={{ color: '#00e096', fontSize: '0.8rem', fontWeight: 600 }}>✓ Registrada</span>
+                )}
+              </div>
+
+              <p style={{ color: '#666', fontSize: '0.8rem', marginBottom: '0.75rem' }}>
+                {huellaRegistrada
+                  ? 'Este socio tiene una huella registrada. Puedes reemplazarla o eliminarla.'
+                  : 'Registra la huella del socio en el lector WA28 conectado por USB.'
+                }
+              </p>
+
+              {/* Mensajes de estado */}
+              {mensajeHuella && (
+                <p style={{
+                  color: mensajeHuella.startsWith('✓') ? '#00e096' : '#ffaa00',
+                  fontSize: '0.85rem', marginBottom: '0.5rem', fontWeight: 600,
+                }}>
+                  {mensajeHuella}
+                </p>
+              )}
+              {errorHuella && (
+                <p style={{ color: '#ff3d71', fontSize: '0.85rem', marginBottom: '0.5rem' }}>
+                  ⚠️ {errorHuella}
+                </p>
+              )}
+
+              <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                <button
+                  onClick={registrarHuella}
+                  disabled={registrandoHuella}
+                  style={{
+                    background: registrandoHuella ? '#2a2a2a' : '#e50914',
+                    color: '#ffffff', border: 'none', borderRadius: '8px',
+                    padding: '0.55rem 1.2rem', fontWeight: 700, fontSize: '0.85rem',
+                    cursor: registrandoHuella ? 'default' : 'pointer',
+                    opacity: registrandoHuella ? 0.7 : 1,
+                    display: 'flex', alignItems: 'center', gap: '0.4rem',
+                  }}
+                >
+                  {registrandoHuella ? (
+                    <><span style={{ animation: 'spin 1s linear infinite', display: 'inline-block' }}>⏳</span> Leyendo...</>
+                  ) : (
+                    <>{huellaRegistrada ? '🔄 Reemplazar huella' : '🖐 Registrar huella'}</>
+                  )}
+                </button>
+
+                {huellaRegistrada && (
+                  <button
+                    onClick={eliminarHuella}
+                    style={{
+                      background: 'none', color: '#ff3d71', border: '1px solid #ff3d71',
+                      borderRadius: '8px', padding: '0.55rem 1rem', fontWeight: 600,
+                      cursor: 'pointer', fontSize: '0.85rem',
+                    }}
+                  >
+                    🗑 Eliminar huella
+                  </button>
+                )}
+              </div>
+
+              <p style={{ color: '#444', fontSize: '0.75rem', marginTop: '0.6rem' }}>
+                El lector debe estar conectado por USB. El navegador mostrará un diálogo para confirmar.
+              </p>
+            </div>
+          )}
+
+          {/* Aviso si es usuario nuevo (la huella se registra después de guardar) */}
+          {!usuarioEditar && (
+            <div style={{
+              marginTop: '1.5rem',
+              background: '#0d0d0d',
+              border: '1px dashed #2a2a2a',
+              borderRadius: '12px',
+              padding: '0.75rem 1.25rem',
+            }}>
+              <p style={{ color: '#555', fontSize: '0.8rem' }}>
+                🖐 <strong style={{ color: '#888' }}>Huella digital:</strong> Guarda el usuario primero y luego podrás registrar su huella desde el botón de edición.
+              </p>
+            </div>
+          )}
+
           {errorGeneral && (
             <div style={{
               background: 'rgba(255,61,113,0.1)', border: '1px solid #ff3d71',
@@ -324,6 +567,13 @@ export default function FormUsuario({ onGuardado, onCerrar, usuarioEditar }: Pro
           </div>
         </div>
       </div>
+
+      <style>{`
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to { transform: rotate(360deg); }
+        }
+      `}</style>
     </>
   );
 }

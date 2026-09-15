@@ -3,7 +3,7 @@ import { useState, useRef, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { formatearRut, validarRut, planLabel, formatDate, diasParaVencer } from '@/lib/utils';
 
-type Modo = 'espera' | 'facial' | 'manual';
+type Modo = 'espera' | 'facial' | 'manual' | 'huella';
 type ResultadoTipo = 'bienvenido' | 'vencido' | 'duplicado' | 'no_encontrado' | 'error';
 
 interface Notificacion {
@@ -16,30 +16,34 @@ interface Notificacion {
 
 const DURACION_NOTIFICACION_MS = 7000;
 
+// ─── Helpers WebAuthn ──────────────────────────────────────────────────────────
+// Convierte un ArrayBuffer a base64url para enviarlo al servidor.
+function bufToBase64(buf: ArrayBuffer): string {
+  return btoa(String.fromCharCode(...new Uint8Array(buf)))
+    .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
+}
+
+// Convierte base64url → Uint8Array para pasarlo a WebAuthn.
+function base64ToBuf(b64: string): Uint8Array {
+  const s = atob(b64.replace(/-/g, '+').replace(/_/g, '/'));
+  return Uint8Array.from(s, c => c.charCodeAt(0));
+}
+// ──────────────────────────────────────────────────────────────────────────────
+
 export default function PantallaPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const intervalRef = useRef<any>(null);
-  const imgRef = useRef<HTMLImageElement | null>(null); // se reutiliza en cada escaneo, en vez de crear una imagen nueva cada vez
-  const rutInputRef = useRef<HTMLInputElement>(null); // se mantiene con foco para escribir o usar un lector de código de barras sin hacer clic primero
+  const imgRef = useRef<HTMLImageElement | null>(null);
+  const rutInputRef = useRef<HTMLInputElement>(null);
   const idNotifRef = useRef(0);
-  // Evita mostrar una notificación nueva para LA MISMA persona si ya se le
-  // mostró una hace pocos segundos (por ejemplo, si se queda parada frente a
-  // la cámara y el escaneo la vuelve a detectar). No afecta a otras personas:
-  // cada una se controla por su propio id.
   const ultimaNotifPorUsuarioRef = useRef<Map<number, number>>(new Map());
   const DEBOUNCE_MISMA_PERSONA_MS = 8000;
-  // Lo mismo, pero para el aviso de "rostro no reconocido" — como ahí no hay
-  // un id de usuario para diferenciar personas, se usa un único cronómetro
-  // global para no repetir el aviso todo el rato si alguien se queda mirando
-  // la cámara sin ser identificado.
   const ultimoNoReconocidoRef = useRef(0);
   const DEBOUNCE_NO_RECONOCIDO_MS = 8000;
 
   const [modo, setModo] = useState<Modo>('espera');
-  // Lista de notificaciones activas — puede haber varias al mismo tiempo si
-  // dos personas distintas ingresan una detrás de la otra.
   const [notificaciones, setNotificaciones] = useState<Notificacion[]>([]);
   const [rutManual, setRutManual] = useState('');
   const [cargando, setCargando] = useState(false);
@@ -48,10 +52,10 @@ export default function PantallaPage() {
   const [hora, setHora] = useState('');
   const [escaneando, setEscaneando] = useState(false);
   const [ultimosAccesos, setUltimosAccesos] = useState<any[]>([]);
+  // Estado del lector de huella
+  const [huellaEspera, setHuellaEspera] = useState(false);
+  const [huellaMensaje, setHuellaMensaje] = useState('');
 
-  // Agrega una notificación a la lista y programa su propio auto-cierre a
-  // los 7 segundos — cada una es independiente, así que varias pueden estar
-  // en pantalla a la vez sin pisarse.
   const mostrarNotificacion = useCallback((datos: Omit<Notificacion, 'id'>) => {
     const id = ++idNotifRef.current;
     setNotificaciones(prev => [...prev, { id, ...datos }]);
@@ -60,13 +64,7 @@ export default function PantallaPage() {
     }, DURACION_NOTIFICACION_MS);
   }, []);
 
-  // Refresco automático cada 6 horas cuando la pantalla está inactiva
-  // (sin notificaciones en pantalla ni un escaneo en curso). Esto es lo que
-  // hacen los kioscos/pantallas de acceso 24/7 en la práctica: por más
-  // optimizado que esté el código, un navegador con cámara + WebGL activos
-  // durante horas se va poniendo lento (memoria, buffers de video, etc.) —
-  // refrescar solos de vez en cuando resuelve eso de raíz sin cortar a
-  // nadie a mitad de un ingreso.
+  // Refresco automático cada 6 horas
   const HORAS_ENTRE_REFRESCOS = 6;
   const inicioRef = useRef(Date.now());
   const estadoActualRef = useRef({ hayNotificaciones: notificaciones.length > 0, escaneando, cargando });
@@ -79,7 +77,7 @@ export default function PantallaPage() {
       if (horasActivo >= HORAS_ENTRE_REFRESCOS && !hayNotificaciones && !enEscaneo && !enCarga) {
         window.location.reload();
       }
-    }, 60000); // revisa cada minuto si ya toca y si es un buen momento para no interrumpir a nadie
+    }, 60000);
     return () => clearInterval(chequeo);
   }, []);
 
@@ -91,7 +89,6 @@ export default function PantallaPage() {
     return () => clearInterval(id);
   }, []);
 
-  // Cargar últimos accesos
   const cargarAccesos = useCallback(async () => {
     const res = await fetch('/api/asistencia?limit=8');
     const data = await res.json();
@@ -100,39 +97,28 @@ export default function PantallaPage() {
 
   useEffect(() => { cargarAccesos(); }, [cargarAccesos]);
 
-  // Mantiene el foco en el campo de RUT para que el personal (o un lector de
-  // código de barras/RUT) pueda escribir y presionar Enter sin hacer clic
-  // primero. Se reaplica solo si el usuario no está usando otro campo (ej.
-  // buscando algo distinto), para no robarle el foco a otra interacción.
   useEffect(() => {
     const reenfocar = () => {
+      if (modo !== 'manual') return;
       const activo = document.activeElement;
       if (!activo || activo === document.body) rutInputRef.current?.focus();
     };
     reenfocar();
     const id = setInterval(reenfocar, 2000);
     return () => clearInterval(id);
-  }, []);
+  }, [modo]);
 
-  // Actualización en vivo del listado lateral, por si el ingreso se registra
-  // desde otro dispositivo (otra pantalla de acceso o el panel admin).
   useEffect(() => {
     const id = setInterval(cargarAccesos, 10000);
     return () => clearInterval(id);
   }, [cargarAccesos]);
 
-  // Cargar face-api.js
+  // ─── face-api ────────────────────────────────────────────────────────────────
   const cargarFaceApi = useCallback(async () => {
     if (typeof window === 'undefined') return;
     setFaceApiCargando(true);
-    
     // @ts-ignore
-    if (window.faceapi) {
-      setFaceApiReady(true);
-      setFaceApiCargando(false);
-      return;
-    }
-
+    if (window.faceapi) { setFaceApiReady(true); setFaceApiCargando(false); return; }
     const script = document.createElement('script');
     script.src = 'https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js';
     script.onload = async () => {
@@ -140,27 +126,19 @@ export default function PantallaPage() {
         // @ts-ignore
         const fa = window.faceapi;
         const MODEL_URL = 'https://cdn.jsdelivr.net/npm/@vladmandic/face-api/model';
-        // tinyFaceDetector: mismo tipo de descriptor facial, pero mucho más rápido
-        // que ssdMobilenetv1 para detectar la cara en tiempo real en un kiosco.
         await Promise.all([
           fa.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
           fa.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
           fa.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
         ]);
         setFaceApiReady(true);
-      } catch {
-        setFaceApiReady(false);
-      }
+      } catch { setFaceApiReady(false); }
       setFaceApiCargando(false);
     };
     script.onerror = () => { setFaceApiCargando(false); };
     document.head.appendChild(script);
   }, []);
 
-  // Cargar jsQR (lectura de códigos QR) — se usa como respaldo cuando el
-  // rostro no se reconoce: la persona muestra su QR a la cámara en vez de
-  // (o además de) su cara. Es una librería chica y sin dependencias, se
-  // carga igual que face-api.js, por CDN.
   const [jsQrListo, setJsQrListo] = useState(false);
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -172,12 +150,10 @@ export default function PantallaPage() {
     document.head.appendChild(script);
   }, []);
 
-  // Iniciar cámara
+  // ─── Cámara ───────────────────────────────────────────────────────────────────
   const iniciarCamara = useCallback(async () => {
     try {
-      const s = await navigator.mediaDevices.getUserMedia({
-        video: { width: 640, height: 480, facingMode: 'user' }
-      });
+      const s = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480, facingMode: 'user' } });
       streamRef.current = s;
       if (videoRef.current) videoRef.current.srcObject = s;
     } catch {
@@ -191,9 +167,7 @@ export default function PantallaPage() {
     streamRef.current = null;
   }, []);
 
-  // Sonido de confirmación con Web Audio API (sin archivos externos) —
-  // le da al kiosco una señal auditiva clara de si el ingreso fue exitoso,
-  // requiere atención (plan vencido / ya registrado) o fue rechazado.
+  // ─── Sonido ───────────────────────────────────────────────────────────────────
   const reproducirTono = (ctx: AudioContext, frecuencia: number, duracionMs: number, retrasoMs = 0) => {
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
@@ -212,7 +186,7 @@ export default function PantallaPage() {
 
   const reproducirSonido = useCallback((tipo: 'exito' | 'aviso' | 'error') => {
     try {
-      // @ts-ignore — Safari expone AudioContext como webkitAudioContext
+      // @ts-ignore
       const AudioContextClase = window.AudioContext || window.webkitAudioContext;
       const ctx: AudioContext = new AudioContextClase();
       if (tipo === 'exito') {
@@ -228,9 +202,6 @@ export default function PantallaPage() {
     } catch {}
   }, []);
 
-  // Muestra la notificación de un ingreso (facial, QR o manual) a partir de
-  // la respuesta del servidor — sin límite de repetición, se usa en el
-  // registro manual donde cada intento es una acción deliberada del staff.
   const emitirNotificacionIngreso = useCallback((data: any) => {
     mostrarNotificacion({
       tipo: data.duplicado ? 'duplicado' : data.planVigente ? 'bienvenido' : 'vencido',
@@ -244,9 +215,6 @@ export default function PantallaPage() {
     }
   }, [cargarAccesos, reproducirSonido, mostrarNotificacion]);
 
-  // Igual que la anterior, pero para el escaneo continuo (facial/QR por
-  // cámara): evita repetir el aviso de la MISMA persona si se queda parada
-  // frente a la cámara. No afecta a otras personas que se detecten mientras tanto.
   const notificarIngresoEscaneo = useCallback((data: any) => {
     if (!data.usuario) return;
     const uid = data.usuario.id;
@@ -257,29 +225,13 @@ export default function PantallaPage() {
     emitirNotificacionIngreso(data);
   }, [emitirNotificacionIngreso]);
 
-  // Activar modo facial
+  // ─── Modo facial ──────────────────────────────────────────────────────────────
   const activarFacial = useCallback(async () => {
     setModo('facial');
     await iniciarCamara();
     if (!faceApiReady) await cargarFaceApi();
   }, [iniciarCamara, cargarFaceApi, faceApiReady]);
 
-  // Escanear frame y buscar rostro.
-  // IMPORTANTE: escaneandoRef es una ref (no estado) a propósito. Antes,
-  // pausar el escaneo tras un reconocimiento se hacía cancelando y
-  // recreando el setInterval — pero como escanearFrame dependía de un
-  // estado que cambiaba en cada ciclo, cada escaneo generaba una NUEVA
-  // versión de la función, lo que disparaba el useEffect de más abajo y
-  // creaba OTRO intervalo en paralelo sin cancelar el anterior. Con cada
-  // persona reconocida quedaba un intervalo "huérfano" corriendo para
-  // siempre. Usando una ref, escanearFrame ya no cambia de referencia y el
-  // intervalo se crea una sola vez.
-  //
-  // Tampoco hay una pausa GLOBAL tras reconocer a alguien: si dos personas
-  // entran seguidas, la segunda debe reconocerse igual sin esperar a que
-  // termine el aviso de la primera. Lo único que se controla es no repetir
-  // el aviso para LA MISMA persona si se le acaba de mostrar uno (ver
-  // ultimaNotifPorUsuarioRef más arriba).
   const escaneandoRef = useRef(false);
 
   const escanearFrame = useCallback(async () => {
@@ -310,9 +262,6 @@ export default function PantallaPage() {
         .withFaceLandmarks()
         .withFaceDescriptor();
 
-      // Si la cara está muy chica (persona lejos de la cámara), el descriptor
-      // sale de mala calidad — se ignora en silencio y no se cuenta como
-      // "cara detectada" para el aviso de no-reconocido más abajo.
       const hayRostroClaro = !!detection && detection.detection.box.width >= anchoVideo * 0.16;
       let resuelto = false;
       let qrIntentadoSinExito = false;
@@ -331,10 +280,6 @@ export default function PantallaPage() {
         }
       }
 
-      // Respaldo con código QR: si el rostro no coincidió con nadie (o no
-      // había una cara clara), se busca un QR de socio en el mismo cuadro
-      // antes de rendirse — útil para quien no tiene foto registrada o no
-      // fue bien reconocido por la cámara.
       // @ts-ignore
       if (!resuelto && jsQrListo && window.jsQR) {
         try {
@@ -362,14 +307,11 @@ export default function PantallaPage() {
         } catch {}
       }
 
-      // Si había una cara clara pero no se pudo identificar ni por rostro ni
-      // por QR, avisar — con su propio "no repetir seguido" para no
-      // spamear si alguien se queda mirando la cámara sin ser reconocido.
       if (!resuelto && (hayRostroClaro || qrIntentadoSinExito)) {
         const ahora = Date.now();
         if (ahora - ultimoNoReconocidoRef.current >= DEBOUNCE_NO_RECONOCIDO_MS) {
           ultimoNoReconocidoRef.current = ahora;
-          mostrarNotificacion({ tipo: 'no_encontrado', mensaje: 'No se pudo identificar — prueba con tu RUT' });
+          mostrarNotificacion({ tipo: 'no_encontrado', mensaje: 'No se pudo identificar — prueba con tu huella o RUT' });
           reproducirSonido('error');
         }
       }
@@ -378,9 +320,6 @@ export default function PantallaPage() {
     setEscaneando(false);
   }, [faceApiReady, jsQrListo, reproducirSonido, mostrarNotificacion, notificarIngresoEscaneo]);
 
-  // Escaneo continuo — cada 1.5s, mucho más ágil que antes gracias al detector liviano.
-  // Este efecto ahora solo depende de modo/faceApiReady (no de escanearFrame
-  // cambiando en cada ciclo), así que el intervalo se crea una única vez.
   useEffect(() => {
     if (modo === 'facial' && faceApiReady) {
       intervalRef.current = setInterval(escanearFrame, 1500);
@@ -388,19 +327,106 @@ export default function PantallaPage() {
     }
   }, [modo, faceApiReady, escanearFrame]);
 
-  // Limpiar al cambiar modo
   useEffect(() => {
     if (modo !== 'facial') detenerCamara();
   }, [modo, detenerCamara]);
 
-  // Liberar la cámara también al desmontar la página (ej. si se navega a
-  // otra sección estando en modo facial) — antes solo se liberaba al
-  // cambiar de modo, nunca al salir de la página por completo.
   useEffect(() => {
     return () => detenerCamara();
   }, [detenerCamara]);
 
-  // Registro manual por RUT
+  // ─── Modo huella (WA28 via WebAuthn) ─────────────────────────────────────────
+  const leerHuella = useCallback(async () => {
+    setHuellaEspera(true);
+    setHuellaMensaje('Pon tu dedo en el lector...');
+
+    try {
+      // 1. Obtener la lista de credenciales registradas en el servidor
+      const resReg = await fetch('/api/huella/verificar');
+      const socios = await resReg.json();
+
+      if (!Array.isArray(socios) || socios.length === 0) {
+        setHuellaMensaje('⚠️ No hay socios con huella registrada');
+        setHuellaEspera(false);
+        return;
+      }
+
+      // 2. Armar allowCredentials con todos los IDs conocidos
+      const allowCredentials: PublicKeyCredentialDescriptor[] = socios.map((s: any) => ({
+        type: 'public-key',
+        id: base64ToBuf(s.huella_id),
+        // Transports que usa el WA28: USB HID → 'usb'; también 'internal' para
+        // TPM/Windows Hello por si el PC lo ofrece como fallback.
+        transports: ['usb', 'internal'] as AuthenticatorTransport[],
+      }));
+
+      // 3. Challenge aleatorio (el servidor podría generarlo; para la pantalla
+      //    de acceso un nonce aleatorio en cliente es suficiente porque la
+      //    verificación real que importa es el match del credentialId en BD).
+      const challenge = crypto.getRandomValues(new Uint8Array(32));
+
+      // 4. Llamada WebAuthn — el WA28 muestra su LED, el usuario pone el dedo
+      const credential = await navigator.credentials.get({
+        publicKey: {
+          challenge,
+          allowCredentials,
+          timeout: 30000,
+          userVerification: 'preferred', // WA28 puede o no verificar PIN
+          rpId: window.location.hostname,
+        },
+      }) as PublicKeyCredential | null;
+
+      if (!credential) {
+        setHuellaMensaje('No se recibió respuesta del lector');
+        setHuellaEspera(false);
+        return;
+      }
+
+      // 5. Enviar el credentialId al servidor para buscar el socio y marcar asistencia
+      const credentialId = bufToBase64(credential.rawId);
+      setHuellaMensaje('Verificando identidad...');
+
+      const res = await fetch('/api/huella/verificar', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ credentialId }),
+      });
+
+      if (res.status === 404) {
+        setHuellaMensaje('Huella no registrada en el sistema');
+        reproducirSonido('error');
+        mostrarNotificacion({ tipo: 'no_encontrado', mensaje: 'Huella no registrada — usa RUT o cámara' });
+        setHuellaEspera(false);
+        return;
+      }
+
+      const data = await res.json();
+      emitirNotificacionIngreso(data);
+      setHuellaMensaje('✓ Listo — pon el siguiente dedo cuando quieras');
+    } catch (err: any) {
+      // El usuario canceló o el lector no respondió a tiempo
+      if (err?.name === 'NotAllowedError') {
+        setHuellaMensaje('Lectura cancelada o tiempo agotado');
+      } else if (err?.name === 'InvalidStateError') {
+        setHuellaMensaje('⚠️ El lector no está disponible — revisa la conexión USB');
+      } else {
+        setHuellaMensaje('Error al leer la huella');
+      }
+      reproducirSonido('error');
+    }
+
+    setHuellaEspera(false);
+  }, [emitirNotificacionIngreso, mostrarNotificacion, reproducirSonido]);
+
+  // Cuando entra al modo huella, lanza la lectura automáticamente
+  useEffect(() => {
+    if (modo === 'huella' && !huellaEspera) {
+      leerHuella();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modo]);
+
+  // ─── Registro manual por RUT ──────────────────────────────────────────────────
   const registrarManual = async () => {
     const rut = rutManual.trim();
     if (!rut) return;
@@ -433,7 +459,6 @@ export default function PantallaPage() {
         body: JSON.stringify({ usuarioId: usuario.id, metodo: 'manual' }),
       });
       const asData = await asRes.json();
-
       emitirNotificacionIngreso({ ...asData, usuario: asData.usuario || usuario });
       setRutManual('');
     } catch {
@@ -445,6 +470,7 @@ export default function PantallaPage() {
     rutInputRef.current?.focus();
   };
 
+  // ─── Estilos de notificación ──────────────────────────────────────────────────
   const coloresResultado: Record<string, { bg: string; border: string; texto: string }> = {
     bienvenido: { bg: 'rgba(0,224,150,0.1)', border: '#00e096', texto: '#00e096' },
     vencido: { bg: 'rgba(255,170,0,0.1)', border: '#ffaa00', texto: '#ffaa00' },
@@ -453,8 +479,6 @@ export default function PantallaPage() {
     error: { bg: 'rgba(255,61,113,0.1)', border: '#ff3d71', texto: '#ff3d71' },
   };
 
-  // Color de los días restantes del plan: verde con margen, amarillo cerca del
-  // vencimiento (10 días o menos) y rojo cuando ya se cumplió (0 o vencido).
   const colorDias = (dias: number) => {
     if (dias <= 0) return '#ff3d71';
     if (dias <= 10) return '#ffaa00';
@@ -467,10 +491,9 @@ export default function PantallaPage() {
     return `Te quedan ${dias} día${dias === 1 ? '' : 's'} de tu plan`;
   };
 
+  // ─── Render ───────────────────────────────────────────────────────────────────
   return (
-    <div style={{
-      minHeight: '100vh', background: '#0a0a0a', display: 'flex', flexDirection: 'column',
-    }}>
+    <div style={{ minHeight: '100vh', background: '#0a0a0a', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
       <header style={{
         background: '#141414', borderBottom: '1px solid #1e1e1e',
@@ -504,15 +527,11 @@ export default function PantallaPage() {
       <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* Panel central */}
         <main style={{ flex: 1, padding: '2rem', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-          
-          {/* Notificaciones de identificación — pueden mostrarse varias a la
-              vez si dos personas distintas ingresan una detrás de la otra */}
+
+          {/* Notificaciones de ingreso */}
           {notificaciones.length > 0 && (
             <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
               {notificaciones.map(n => {
-                // El caso "duplicado" (ya marcó hace poco) se ve igual que un
-                // ingreso normal — verde o ámbar según si el plan sigue
-                // vigente — en vez de un color neutro aparte.
                 const estiloTipo = n.tipo === 'duplicado'
                   ? (n.planVigente ? 'bienvenido' : 'vencido')
                   : n.tipo;
@@ -532,7 +551,6 @@ export default function PantallaPage() {
                       <div>
                         {n.usuario ? (
                           <>
-                            {/* Bienvenida grande y motivacional */}
                             <div style={{
                               fontSize: '2rem', fontWeight: 900, lineHeight: 1.15,
                               color: estilo.texto,
@@ -542,25 +560,19 @@ export default function PantallaPage() {
                             <div style={{ fontSize: '1.1rem', fontWeight: 600, color: '#ffffff', marginTop: '0.2rem' }}>
                               {n.planVigente ? 'a romper tus límites 💪' : '⚠️ tu plan está vencido'}
                             </div>
-
-                            {/* Días restantes del plan, coloreados según cuánto queda — siempre visible */}
                             <div style={{
                               marginTop: '0.7rem', fontSize: '1.7rem', fontWeight: 800,
                               color: colorDias(diasParaVencer(n.usuario.plan_vencimiento)),
                             }}>
                               {textoDias(diasParaVencer(n.usuario.plan_vencimiento))}
                             </div>
-
                             <div style={{ color: '#888', marginTop: '0.5rem', fontSize: '0.85rem' }}>
                               {n.usuario.rut} — Plan: {planLabel(n.usuario.plan_tipo)}
                               {' '}— Vence: {formatDate(n.usuario.plan_vencimiento)}
                             </div>
                           </>
                         ) : (
-                          <div style={{
-                            fontSize: '1.4rem', fontWeight: 800,
-                            color: estilo.texto,
-                          }}>
+                          <div style={{ fontSize: '1.4rem', fontWeight: 800, color: estilo.texto }}>
                             {n.mensaje}
                           </div>
                         )}
@@ -572,14 +584,88 @@ export default function PantallaPage() {
             </div>
           )}
 
-          {/* Modos de identificación */}
-          <div style={{ display: 'grid', gridTemplateColumns: '1.8fr 0.8fr', gap: '1.5rem', flex: 1, alignItems: 'start' }}>
-            
-            {/* Reconocimiento Facial */}
+          {/* ── Grid de modos ── */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1.5rem', flex: 1, alignItems: 'start' }}>
+
+            {/* ── Modo Huella WA28 ── */}
+            <div style={{
+              background: '#141414',
+              border: `2px solid ${modo === 'huella' ? '#e50914' : '#1e1e1e'}`,
+              borderRadius: '16px', padding: '1.5rem',
+              display: 'flex', flexDirection: 'column', minHeight: '280px',
+            }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
+                <h2 style={{ color: '#e50914', fontSize: '1.1rem', fontWeight: 700 }}>
+                  🖐 Huella Digital (WA28)
+                </h2>
+                {modo === 'huella' && (
+                  <button onClick={() => { setModo('espera'); setHuellaEspera(false); setHuellaMensaje(''); }} style={{
+                    background: 'none', border: '1px solid #2a2a2a', color: '#888',
+                    borderRadius: '6px', padding: '0.3rem 0.75rem', cursor: 'pointer',
+                    fontSize: '0.8rem',
+                  }}>✕ Salir</button>
+                )}
+              </div>
+
+              {modo !== 'huella' ? (
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
+                  <div style={{ fontSize: '4rem' }}>🖐</div>
+                  <p style={{ color: '#888', textAlign: 'center', fontSize: '0.9rem', maxWidth: '260px' }}>
+                    Identifica socios con el lector WA28 conectado por USB
+                  </p>
+                  <button
+                    onClick={() => setModo('huella')}
+                    style={{
+                      background: '#e50914', color: '#ffffff', border: 'none',
+                      borderRadius: '10px', padding: '0.75rem 2rem', cursor: 'pointer',
+                      fontWeight: 700, fontSize: '1rem',
+                    }}
+                  >
+                    Activar Lector
+                  </button>
+                </div>
+              ) : (
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1.5rem' }}>
+                  {/* Ícono animado del lector */}
+                  <div style={{
+                    fontSize: '5rem',
+                    animation: huellaEspera ? 'pulse-huella 1.2s ease-in-out infinite' : 'none',
+                  }}>🖐</div>
+
+                  <p style={{
+                    color: huellaEspera ? '#e50914' : '#888',
+                    fontSize: '1rem', fontWeight: huellaEspera ? 700 : 400,
+                    textAlign: 'center', maxWidth: '260px',
+                  }}>
+                    {huellaEspera ? huellaMensaje : (huellaMensaje || 'Lector listo')}
+                  </p>
+
+                  {/* Botón para volver a intentar si no está esperando */}
+                  {!huellaEspera && (
+                    <button
+                      onClick={leerHuella}
+                      style={{
+                        background: '#e50914', color: '#ffffff', border: 'none',
+                        borderRadius: '10px', padding: '0.75rem 2rem', cursor: 'pointer',
+                        fontWeight: 700, fontSize: '1rem',
+                      }}
+                    >
+                      🖐 Leer huella
+                    </button>
+                  )}
+
+                  <p style={{ color: '#444', fontSize: '0.8rem', textAlign: 'center' }}>
+                    El lector pide el dedo automáticamente al activar
+                  </p>
+                </div>
+              )}
+            </div>
+
+            {/* ── Modo Facial / QR ── */}
             <div style={{
               background: '#141414', border: `2px solid ${modo === 'facial' ? '#e50914' : '#1e1e1e'}`,
               borderRadius: '16px', padding: '1.5rem', display: 'flex', flexDirection: 'column',
-              alignSelf: 'stretch', minHeight: '420px',
+              alignSelf: 'stretch', minHeight: '280px',
             }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
                 <h2 style={{ color: '#e50914', fontSize: '1.1rem', fontWeight: 700 }}>
@@ -595,13 +681,10 @@ export default function PantallaPage() {
               </div>
 
               {modo !== 'facial' ? (
-                <div style={{
-                  flex: 1, display: 'flex', flexDirection: 'column',
-                  alignItems: 'center', justifyContent: 'center', gap: '1rem',
-                }}>
+                <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: '1rem' }}>
                   <div style={{ fontSize: '4rem' }}>📷</div>
                   <p style={{ color: '#888', textAlign: 'center', fontSize: '0.9rem' }}>
-                    Identifica a los socios con su rostro — o mostrando su código QR si no tienen foto registrada
+                    Identifica socios por rostro o código QR
                   </p>
                   <button onClick={activarFacial} style={{
                     background: '#e50914', color: '#ffffff', border: 'none',
@@ -618,7 +701,6 @@ export default function PantallaPage() {
                       width: '100%', height: '100%', objectFit: 'cover', display: 'block',
                       transform: 'scaleX(-1)',
                     }} />
-                    {/* Overlay de escaneo */}
                     <div style={{
                       position: 'absolute', inset: 0, pointerEvents: 'none',
                       display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -645,49 +727,43 @@ export default function PantallaPage() {
                 </div>
               )}
             </div>
+          </div>
 
-            {/* Registro Manual — intencionalmente muy compacto: se usa poco,
-                toda la prioridad visual es para el texto de bienvenida y el
-                reconocimiento facial */}
-            <div style={{
-              background: '#141414', border: `2px solid ${modo === 'manual' ? '#e50914' : '#1e1e1e'}`,
-              borderRadius: '12px', padding: '0.75rem', display: 'flex', flexDirection: 'column',
-              alignSelf: 'start', gap: '0.5rem',
-            }}>
-              <h2 style={{ color: '#e50914', fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
-                Registro Manual (RUT)
-              </h2>
-              <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
-                <input
-                  ref={rutInputRef}
-                  value={rutManual}
-                  onChange={e => setRutManual(formatearRut(e.target.value))}
-                  onKeyDown={e => e.key === 'Enter' && registrarManual()}
-                  placeholder="12.345.678-9"
-                  style={{
-                    flex: 1, minWidth: 0, background: '#1e1e1e', border: '1px solid #2a2a2a',
-                    borderRadius: '6px', padding: '0.4rem 0.5rem', color: '#ffffff',
-                    fontSize: '0.8rem', outline: 'none', textAlign: 'center',
-                    fontFamily: 'monospace', letterSpacing: '0.5px', boxSizing: 'border-box',
-                  }}
-                />
-                <button
-                  onClick={registrarManual}
-                  disabled={cargando || !rutManual}
-                  title="Registrar ingreso"
-                  style={{
-                    background: rutManual ? '#e50914' : '#1e1e1e',
-                    color: rutManual ? '#ffffff' : '#888',
-                    border: 'none', borderRadius: '6px',
-                    padding: '0.4rem 0.7rem', cursor: rutManual ? 'pointer' : 'not-allowed',
-                    fontWeight: 700, fontSize: '0.8rem', flexShrink: 0,
-                    opacity: cargando ? 0.7 : 1,
-                  }}
-                >
-                  {cargando ? '⏳' : '→'}
-                </button>
-              </div>
-            </div>
+          {/* ── Registro manual compacto ── */}
+          <div style={{
+            background: '#141414', border: '1px solid #1e1e1e',
+            borderRadius: '12px', padding: '0.75rem',
+            display: 'flex', alignItems: 'center', gap: '0.75rem',
+          }}>
+            <span style={{ color: '#888', fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', whiteSpace: 'nowrap' }}>
+              Ingreso por RUT
+            </span>
+            <input
+              ref={rutInputRef}
+              value={rutManual}
+              onChange={e => setRutManual(formatearRut(e.target.value))}
+              onKeyDown={e => e.key === 'Enter' && registrarManual()}
+              placeholder="12.345.678-9"
+              style={{
+                flex: 1, minWidth: 0, background: '#1e1e1e', border: '1px solid #2a2a2a',
+                borderRadius: '6px', padding: '0.4rem 0.5rem', color: '#ffffff',
+                fontSize: '0.85rem', outline: 'none', textAlign: 'center',
+                fontFamily: 'monospace', letterSpacing: '0.5px',
+              }}
+            />
+            <button
+              onClick={registrarManual}
+              disabled={cargando || !rutManual}
+              style={{
+                background: rutManual ? '#e50914' : '#1e1e1e',
+                color: rutManual ? '#ffffff' : '#888',
+                border: 'none', borderRadius: '6px',
+                padding: '0.4rem 0.75rem', cursor: rutManual ? 'pointer' : 'not-allowed',
+                fontWeight: 700, fontSize: '0.85rem', opacity: cargando ? 0.7 : 1,
+              }}
+            >
+              {cargando ? '⏳' : 'Registrar →'}
+            </button>
           </div>
         </main>
 
@@ -712,7 +788,9 @@ export default function PantallaPage() {
                   {a.nombre}
                 </div>
                 <div style={{ color: '#888', fontSize: '0.75rem', display: 'flex', justifyContent: 'space-between' }}>
-                  <span>{a.metodo === 'facial' ? '🤳' : '✍️'} {a.metodo}</span>
+                  <span>
+                    {a.metodo === 'facial' ? '🤳' : a.metodo === 'huella' ? '🖐' : '✍️'} {a.metodo}
+                  </span>
                   <span>{new Date(a.timestamp).toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit' })}</span>
                 </div>
               </div>
@@ -729,6 +807,10 @@ export default function PantallaPage() {
         @keyframes pulse-accent {
           0%, 100% { box-shadow: 0 0 0 0 rgba(229, 9, 20, 0.4); }
           50% { box-shadow: 0 0 0 15px rgba(229, 9, 20, 0); }
+        }
+        @keyframes pulse-huella {
+          0%, 100% { transform: scale(1); opacity: 1; }
+          50% { transform: scale(1.12); opacity: 0.7; }
         }
       `}</style>
     </div>
